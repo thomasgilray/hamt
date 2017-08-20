@@ -102,10 +102,10 @@ public:
 	
     union Val
     {
-	const KV<K,V,d+1>* const node;
+	const KVnext* const node;
 	const V* const val;
 	    
-        Val(const KV<K,V,d+1>* const node) : node(node) { }
+        Val(const KVnext* const node) : node(node) { }
         Val(const V* const val) : val(val) { }
     } v;
 
@@ -116,7 +116,7 @@ public:
     KV<K,V,d>(const KVtype& o) : k(o.k), v(o.v) { }
 
     // The different cases spelled out as constructors
-    KV<K,V,d>(const u64 bm, const KV<K,V,d+1>* const kv) : k(bm), v(kv) { }
+    KV<K,V,d>(const u64 bm, const KVnext* const kv) : k(bm), v(kv) { }
     KV<K,V,d>(const K* key, const V* val) : k(key), v(val) { }
     
     // Equality check (doesn't actually matter which types k and v are)
@@ -134,7 +134,7 @@ public:
 	// bm is the bitmap indicating which elements are actually stored
 	// count is how many KV elements this inner node stores (popcount of bm)
 	// i is hpiece's index; i.e., how many KV elements *preceed* index hpiece
-	const KV<K,V,d+1>* const data = kv.v.node;
+	const KVnext* const data = kv.v.node;
 	const u64 bm = kv.k.bm >> 1;
 
 	const bool exists = bm & (1UL << hpiece);
@@ -149,7 +149,7 @@ public:
 		    return 0;
 	    }
 	    else
-		return KV<K,V,d+1>::inner_find(data[i], h >> 6, key);
+		return KVnext::inner_find(data[i], h >> 6, key);
 	}
 	else
 	    return 0;
@@ -175,9 +175,9 @@ public:
 	if (h0piece == h1piece)
 	{
 	    // Create a new node to merge them at d+1
-	    const KV<K,V,d+1> childkv = KV<K,V,d+1>::new_inner_node(h0 >> 6, k0, v0, h1 >> 6, k1, v1);
-	    KV<K,V,d+1>* const node = (KV<K,V,d+1>*)GC_MALLOC(sizeof(KV<K,V,d+1>));
-	    new (node+0) KV<K,V,d+1>(childkv);
+	    const KVnext childkv = KVnext::new_inner_node(h0 >> 6, k0, v0, h1 >> 6, k1, v1);
+	    KVnext* const node = (KVnext*)GC_MALLOC(sizeof(KVnext));
+	    new (node+0) KVnext(childkv);
                 
 	    // Return a new kv; bitmap indicates h0piece, the shared child inner node
 	    return KVtype(((1UL << h0piece) << 1) | 1, node);		
@@ -186,16 +186,16 @@ public:
 	{
 	    // The two key/value pairs exist at different buckets at this d;
 	    // allocate them in proper order 
-	    KV<K,V,d+1>* const node = (KV<K,V,d+1>*)GC_MALLOC(2*sizeof(KV<K,V,d+1>));
+	    KVnext* const node = (KVnext*)GC_MALLOC(2*sizeof(KVnext));
 	    if (h1piece < h0piece)
 	    {
-		new (node+0) KV<K,V,d+1>(k1,v1);
-		new (node+1) KV<K,V,d+1>(k0,v0);
+		new (node+0) KVnext(k1,v1);
+		new (node+1) KVnext(k0,v0);
 	    }
 	    else
 	    {
-		new (node+0) KV<K,V,d+1>(k0,v0);
-		new (node+1) KV<K,V,d+1>(k1, v1);
+		new (node+0) KVnext(k0,v0);
+		new (node+1) KVnext(k1, v1);
 	    }	    
 
 	    // Return a new kv; bitmap indicates both h0piece and h1piece
@@ -210,7 +210,7 @@ public:
 	// bm is the bitmap indicating which elements are actually stored
 	// count is how many KV elements this inner node stores (popcount of bm)
 	// i is hpiece's index; i.e., how many KV elements *preceed* index hpiece
-	const KV<K,V,d+1>* const data = kv.v.node;
+	const KVnext* const data = kv.v.node;
 	const u64 bm = kv.k.bm >> 1;	
 	const u32 hpiece = (h & 0x3f) % 63;
 	const u32 count = __builtin_popcountll(bm);
@@ -228,29 +228,29 @@ public:
 		if (*(data[i].k.key) == *key)
 		{
 		    // it already exists; replace the value  
-		    const KV<K,V,d+1>* const node = KV<K,V,d+1>::update_node(data, count, i, KV<K,V,d+1>(key,val));
+		    const KVnext* const node = KVnext::update_node(data, count, i, KVnext(key,val));
 		    return KVtype(kv.k.bm, node);
 		}		    
 		else
 		{
 		    // Merge them into a new inner node
 		    (*cptr)++;
-		    const KV<K,V,d+1> childkv = KV<K,V,d+1>::new_inner_node(
+		    const KVnext childkv = KVnext::new_inner_node(
 			// Passes in the first triple of h,k,v, then the second
 			// When shifting the just-recomputed hash right, this formula is computed at compile time
 			// This also means a warning on the d=9 template instantiation, so we do %64 as d=10
 			// does not care in any case as it's definitely a LL*.
 			(data[i].k.key->hash() >> ((6*(d+1)+4)) % 64), data[i].k.key, data[i].v.val,
 			h >> 6, key, val);
-		    const KV<K,V,d+1>* const node = KV<K,V,d+1>::update_node(data, count, i, childkv);
+		    const KVnext* const node = KVnext::update_node(data, count, i, childkv);
 		    return KVtype(kv. k.bm, node);
 		}
 	    }
 	    else //if ((data[i].k & 1) == 1)
 	    {
 		// an inner node is already here; recursively do an insert and replace it
-		const KV<K,V,d+1> childkv = KV<K,V,d+1>::insert_inner(data[i], h >> 6, key, val, cptr);
-		const KV<K,V,d+1>* const node = KV<K,V,d+1>::update_node(data, count, i, childkv);
+		const KVnext childkv = KVnext::insert_inner(data[i], h >> 6, key, val, cptr);
+		const KVnext* const node = KVnext::update_node(data, count, i, childkv);
 		return KVtype(kv.k.bm, node);
 	    }
 	}
@@ -258,10 +258,10 @@ public:
 	{
 	    // Create a new copy with this Key/Value inserted at index i
 	    (*cptr)++;
-	    KV<K,V,d+1>* const node = (KV<K,V,d+1>*)GC_MALLOC((count+1)*sizeof(KV<K,V,d+1>));
-	    std::memcpy(node, data, i*sizeof(KV<K,V,d+1>));
-	    std::memcpy(&(node[i+1]), &(data[i]), (count-i)*sizeof(KV<K,V,d+1>));
-	    new (node+i) KV<K,V,d+1>(key, val);
+	    KVnext* const node = (KVnext*)GC_MALLOC((count+1)*sizeof(KVnext));
+	    std::memcpy(node, data, i*sizeof(KVnext));
+	    std::memcpy(&(node[i+1]), &(data[i]), (count-i)*sizeof(KVnext));
+	    new (node+i) KVnext(key, val);
 	    
 	    // Update the bitmap and return this new inner node as a KV
 	    return KVtype(((bm | (1UL << hpiece)) << 1) | 1, node);
@@ -272,7 +272,7 @@ public:
     static const KVtype remove_inner(const KVtype& kv, const u64 h, const K* const key, u64* const cptr)
     {
 	// We follow the same basic structure as insert_inner; first, calculate the next hash piece
-	const KV<K,V,d+1>* const data = kv.v.node;
+	const KVnext* const data = kv.v.node;
 	const u64 bm = kv.k.bm >> 1;
 	const u32 hpiece = (h & 0x3f) % 63;
 	const u32 count = __builtin_popcountll(bm);
@@ -290,9 +290,9 @@ public:
 		{
 		    // Create a new node, removing this kv
 		    (*cptr)--;
-		    KV<K,V,d+1>* const node = (KV<K,V,d+1>*)GC_MALLOC((count-1)*sizeof(KV<K,V,d+1>));
+		    KVnext* const node = (KVnext*)GC_MALLOC((count-1)*sizeof(KVnext));
 		    std::memcpy(node, data, i*sizeof(KV));
-		    std::memcpy(&(node[i]), &(data[i+1]), (count-1-i)*sizeof(KV<K,V,d+1>));
+		    std::memcpy(&(node[i]), &(data[i+1]), (count-1-i)*sizeof(KVnext));
 
 		    // Remove this hpiece from the bitmap
 		    const u64 newbm = ((bm & (0xffffffffffffffff ^ (1UL << hpiece))) << 1) | 1;
@@ -305,13 +305,13 @@ public:
 	    else //if ((data[i].k & 1) == 1)
 	    {
 		// Try a remove_inner and see what comes back
-		const KV<K,V,d+1> childkv = KV<K,V,d+1>::remove_inner(data[i], h >> 6, key, cptr);
+		const KVnext childkv = KVnext::remove_inner(data[i], h >> 6, key, cptr);
 		if (childkv == data[i])
 		    // Key was already absent within child node
 		    return kv;
 		else
 		{
-		    const KV<K,V,d+1>* const node = KV<K,V,d+1>::update_node(data, count, i, childkv);
+		    const KVnext* const node = KVnext::update_node(data, count, i, childkv);
 		    return KVtype(kv.k.bm, node);
 		}
 	    }
@@ -335,7 +335,7 @@ public:
     // We use two unions and the following cheap tagging scheme:
     // when the lowest bit of Key k is 0, it's a key and a K*,V* pair (key and value),
     // when the lowest bit of Key k is 1, it's either a bm (bitmap) in the top 63 bits with a 
-    // KV<K,V,d+1>* v inner node pointer when d is less than bd-1 or it's just a 1 and a pointer to a
+    // KVnext* v inner node pointer when d is less than bd-1 or it's just a 1 and a pointer to a
     // LL<K,V>* for collisions (In this case we use LL<K,V>*)
     union Key
     {
