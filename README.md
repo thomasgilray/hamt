@@ -9,6 +9,7 @@ To build and run tests to get started, install Boehm GC from https://github.com/
 Then you may simply run:
 
 $ make clean; make
+
 $ ./test_hamt
 
 

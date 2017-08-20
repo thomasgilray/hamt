@@ -1,3 +1,5 @@
+// Copyright (C) 2017 Thomas Gilray, Kristopher Micinski
+// See the notice in LICENSE.md
 
 
 #include "gc.h"
@@ -6,6 +8,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <thread>
+
 
 u64 utime()
 {
@@ -22,36 +25,33 @@ public:
 
     tuple(u64 x, u64 y, u64 z)
         : x(x), y(y), z(z)
-        {
-            //GC_register_finalizer(this,&tuple_final,0,0,0);
-        }
+    {}
 
     u64 hash() const
+    {
+        const u8* data = reinterpret_cast<const u8*>(this);
+        u64 h = 0xcbf29ce484222325;
+        for (u32 i = 0; i < sizeof(tuple); ++i && ++data)
         {
-            const u8* data = reinterpret_cast<const u8*>(this);
-            u64 h = 0xcbf29ce484222325;
-            for (u32 i = 0; i < sizeof(tuple); ++i && ++data)
-            {
-                h = h ^ *data;
-                h = h * 0x100000001b3;
-            }
-
-            return h;
+            h = h ^ *data;
+            h = h * 0x100000001b3;
         }
+
+        return h;
+    }
 
     bool operator==(const tuple& t) const
-        {
-            return t.x == this->x
-                && t.y == this->y
-                && t.z == this->z;
-        }
+    {
+        return t.x == this->x
+            && t.y == this->y
+            && t.z == this->z;
+    }
 };
-
-
 
 
 void report_gc_size()
 {
+    // Can be added back in for debugging purposes if desired
     //std::cout << GC_get_heap_size() << std::endl;
 }
 
@@ -62,8 +62,10 @@ void testround()
     //std::cout << "Test round (offset=" << offset << ", threadid=" << std::this_thread::get_id() << "):" << std::endl;
 
     const hamt<tuple, tuple>* h = new ((hamt<tuple,tuple>*)GC_MALLOC(sizeof(hamt<tuple,tuple>))) hamt<tuple,tuple>();
-    
+
+    // *** This is the main value to scale the test up or down
     const u32 loops = 75000;
+    // *************************
 
     // Add values
     for (u32 i = offset; i < offset+loops; ++i)

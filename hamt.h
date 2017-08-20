@@ -9,7 +9,6 @@
 #include "gc.h"
 #include <algorithm>
 #include <cstring>
-#include <iostream>
 
 
 // The largest that bottom depth can be is 10, after this you run out of 64bit hash
