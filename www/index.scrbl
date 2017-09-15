@@ -158,3 +158,62 @@ association list, imagine how confusing it would be if we
 built a subsequent association list, and then someone
 changed one of the values out from under us!.
 
+This section not yet finished...
+
+@section{Next: Trees and Tries}
+
+One of the most standard data structures in the functional
+programmer's arsenal is the sorted tree. Trees give you nice
+logarthmic runtimes and offer efficient persistence by
+sharing nodes:
+
+@(cimgn "images/tree.png")
+
+The problem with trees is that in the worse case they give
+lookup performance no better than a list:
+
+@(cimgn "images/badtree.png")
+
+This happens when elements are inserted in order. A number
+of techniques exist to avoid this worst-case behavior. For
+example,
+@link["https://en.wikipedia.org/wiki/Red%E2%80%93black_tree"]{
+ Red-Black trees} automatically rebalance upon each @tt{
+ insert} operation.
+
+One way of constructing a constructing a balanced binary
+tree probabilistically (most of the time) is to randomize
+the elements before inserting them. This avoids the
+worst-case behavior of inserting elements in sorted order.
+One way to do this would be to hash each key and insert into
+the tree based on that hash. This won't immediately buy us a
+performance improvement, but it will get us closer to the
+core design of HAMT. Each node in the tree is now a:
+
+@itemlist[
+ @item{A pointer to the left and right subtrees}
+ @item{A hash of the key for that cell}
+ @item{A pointer to a linked list of key-value pairs}
+]
+
+The reason for the last item is that hashes have the
+possibility of @emph{collision}: two values can hash to the
+same thing. If we use a sufficiently large hash, and a good
+hash function, this will happen rarely. Here's an example of
+what our hash-tree looks like, with the linked lists
+highlighted in green:
+
+@(cimgn "images/hashtree.png")
+
+@subsection{From trees to tries}
+
+Turning our sorted tree into a hash-tree doesn't buy us any
+performance improvement, but it helps us make our way
+towards exploiting some of the unique properties of the
+hash-tree.
+
+One useful observation we can make is that hashes can be
+ordered simply into prefixes:
+
+@(cimgn "images/prefixnums.png")
+
