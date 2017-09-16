@@ -205,6 +205,17 @@ highlighted in green:
 
 @(cimgn "images/hashtree.png")
 
+@subsection{Worst case beahvior}
+
+Note that we have done nothing to improve the worst-case
+behavior of our binary tree. We could still end up in this
+scenario (note that the linked lists are elided):
+
+@(cimgn "images/worsttree.png")
+
+This means that the complexity of operations on our tree is
+@emph{still} @($ "O(n)"). Let's tackle that next.
+
 @subsection{From trees to tries}
 
 Turning our sorted tree into a hash-tree doesn't buy us any
@@ -212,8 +223,89 @@ performance improvement, but it helps us make our way
 towards exploiting some of the unique properties of the
 hash-tree.
 
-One useful observation we can make is that hashes can be
-ordered simply into prefixes:
+Hashes form a very natural prefix-ordering:
 
 @(cimgn "images/prefixnums.png")
 
+Each element in the sequence is a suffix of the element
+before it. We can also represent the elements elements of a
+binary tree:
+
+@(cimgn "images/numbertrie.png")
+
+However, note that if we force our tree to be a trie, it is
+@emph{not} possible to represent the worst-case
+configuration shown above: @tt{0x00000001} is not a prefix
+of @tt{0x00000002}.
+
+@subsubsection{Exploiting the Trie}
+
+If we force our trees to be tries, and assuming we use a
+64-bit hash, we can reduce the maximum size of our trees
+from @($ "O(n)") to 64! The way we do it is to represent our
+key-value pairs using a trie, where each node represents a
+@emph{partial} hash. Note that--for now--we have left off
+the value component of the key-value pairs and are simply
+drawing the hashes, we will get back to that shortly.
+@; This text needs major fixing since it feels rough.
+
+@(cimgw "images/binarytrie.png")
+
+Notice that each child node is arranged such that it is a
+prefix of its parent. Our trie can be viewed as a decision
+tree, answering the question, "is the next bit zero or one?"
+Because we only have a 64-bit hash, our trie will have depth
+64! Keep in mind that at the leaf nodes, we will still have
+to keep a key-value association list, because it's always
+possible to have hash collisions. However, the likelihood of
+that happening with a good hash function is realtively low.
+
+@subsubsection{A few optimizations}
+
+Our trie now avoids the worst-case behavior we observed with
+a sorted binary tree, which appears better in theory, but
+has a few undesirable traits in practice:
+
+@itemlist[
+ @item{A maximum depth of 64 is still quite a large tree to traverse in the worst-case}
+ @item{In the case that the map is relatively sparse--i.e.,
+  that it doesn't contain many key-value pairs, we are still
+  required to traverse all the way down to the leaf just to lookup one key-value pair.}
+ ]
+
+@centered{@bold{Reducing the Height}}
+
+To solve the first problem, we can simply switch from a
+binary tree to an n-ary tree: in our case, we're going to
+hold 64 "buckets" at each node, rather than 2. By doing
+this, we'll lower the maximum depth of our tree to be 10.
+Instead of each node deciding whether a bit will be a 0 or a
+1, each node will decide whether the next 6 bits of the hash
+are @tt{0x00} to @tt{0x3F}:
+
+@(cimgn "images/buckets.png")
+
+So now our trie will have a structure like this:
+
+@(cimgn "images/fullbuckets.png")
+
+@centered{@bold{Store the Key-Value Pair When Possible}}
+
+It turns out that most of the time, our trie won't really
+need to be of depth ten. In fact, in the following scenario,
+we'd waste a lot of time traversing pointers:
+
+@(cimgn "images/wasted.png")
+
+This is because each key occupies a different bucket for the
+top level node. In fact, we could instead just a
+configuration like the following:
+
+@(cimgn "images/lesswasted.png")
+
+What we ultimately want is a data structure that stores the
+key-value pair as close to the top as possible until it has
+to keep things separate.
+
+For example, consider that "Sam" had @emph{instead} hashed
+to @tt{0xFCA...}.
