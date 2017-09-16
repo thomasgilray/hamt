@@ -102,7 +102,7 @@ we prepend a new key-value pair to the list:
 
 @(cimgn "images/assoclist.png")
 
-The association list uses sharing to acheive both constant
+The association list uses sharing to achieve both constant
 time and space complexity for insertion. But to lookup a
 value, we potentially need to go far down into the
 association list. So our table now looks like:
@@ -164,7 +164,7 @@ This section not yet finished...
 
 One of the most standard data structures in the functional
 programmer's arsenal is the sorted tree. Trees give you nice
-logarthmic runtimes and offer efficient persistence by
+logarithmic runtime and offer efficient persistence by
 sharing nodes:
 
 @(cimgn "images/tree.png")
@@ -258,7 +258,7 @@ Because we only have a 64-bit hash, our trie will have depth
 64! Keep in mind that at the leaf nodes, we will still have
 to keep a key-value association list, because it's always
 possible to have hash collisions. However, the likelihood of
-that happening with a good hash function is realtively low.
+that happening with a good hash function is relatively low.
 
 @subsubsection{A few optimizations}
 
@@ -307,5 +307,47 @@ What we ultimately want is a data structure that stores the
 key-value pair as close to the top as possible until it has
 to keep things separate.
 
-For example, consider that "Sam" had @emph{instead} hashed
-to @tt{0xFCA...}.
+To do that, the nodes in our trie will either hold 64
+buckets of child nodes, or will hold an association list of
+key-value pairs. Remember, they can't possibly hold one
+unique key-value pair because hash collisions are always
+possible. This optimizes our trie so that in cases that we
+don't @emph{need} additional depth, we won't be using it.
+Additionally, assuming we're using a suitable hash function,
+we should get relatively good dispersion between buckets.
+This means that--probabilistically--we'll be holding most
+things closer to the top until the map is holding a lot of
+key-value pairs.
+
+One way to think about this is that we will build the nodes
+in our trie lazily, only using as many bits of the hash as
+we need. If we can differentiate all of the hashes of our
+key-value pairs using their first six bits, we will only
+have one "layer" of the trie that we need to traverse until
+we reach the data we want to access.
+
+If we lay out our trie in this manner, we need to be careful
+about how insertion happens. For example, consider a trie
+which stores a record for José near the top. Let's assume
+the string "José" hashes to @tt{0xFC0..} (we will only need
+the first 12 digits for this example). José's record will be
+stored in the key-value pair association list for the @tt{
+ 0x3F} bucket of the first node. Now consider what happens
+when we want to insert a key-value pair for Sam, which (for
+the purposes of illustration) we will assume hashes to @tt{
+ 0xFFF}. Because the first six binary digits of the hahes for
+José and Sam both hash to @tt{0x3F}, we will need to split
+that bucket into @emph{another} bucket, holding another 64
+values.
+
+Here's an illustration of how insert works given this
+configuration:
+
+@(cimgw "images/split.png")
+
+@centered{@bold{Reducing Wasted Memory}}
+
+... popcount
+
+@section{Implementing HAMT}
+
