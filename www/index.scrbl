@@ -347,7 +347,51 @@ configuration:
 
 @centered{@bold{Reducing Wasted Memory}}
 
-... popcount
+When the trie is relatively sparse, assigning 64 buckets to
+each node is inefficient in terms of both space (occupied by
+each node) and time (spent copying memory to allocate new
+nodes).
+
+To solve this problem, we'll use a bitmap. Instead of each
+node holding 64 buckets, a node will hold a single 64 bit
+value, @tt{bitmap}, with an array of buckets, @tt{data}.
+Then, if position i in @tt{bitmap} is set, it will represent
+the fact that bucket i is occupied (non-null). Then, we will
+make @tt{data} an array whose length is equal to the number
+of 1s in @tt{bitmap}. The ith index into @tt{data} will be
+regarded as the bucket occuppied by the ith occurrence of 1
+in @tt{bitmap}.
+
+This is quite tricky, so here's a picture:
+
+@(cimgw "images/oldvsnew.png")
+
+The old representation of a trie node is shown on the left.
+The new, more efficient, representation is shown on the
+right. In the old representation we can see 64 buckets, with
+José occupying the first bucket at position @tt{0x00}, and
+Sam occupying the last at position @tt{0x3F}. Between them
+is 62 null pointers to pieces of hashes which have not yet
+been inserted into the trie.
+
+In our new representation we see the bitmap and a @tt{data}
+array of two elements. Because José's hash occupies position
+@tt{0x00} in the old representation, the 0th bit of @tt{
+ bitmap} will be set to 1. Similarly, because Sam's record
+occupied position @tt{0x3F} in the old representation, the
+64th bit of @tt{bitmap} will be set.
+
+To access Sam's record, we would go to position 64 in the
+bitmap and check to see that it was set to 1. If it is not,
+no record would exist for Sam in this node. Assuming it is,
+we then count the number of 1s @emph{below} position 64 in
+the bitmap. This operation is called @tt{popcount} (short
+for "population count," which counts the number of 1s in a
+machine word), and built into many modern instruction sets.
+We then use @tt{popcount} to index into @tt{data}.
+
+By doing this, we reduce the amount of space stored for each
+node from 64 to @tt{popcount}.
 
 @section{Implementing HAMT}
 
