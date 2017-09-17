@@ -671,9 +671,6 @@ again delegate to @tt{inner_find}.
 
 @subsubsection{Lookup From an Association List}
 
-
-@subsubsection{Lookup From an Association List}
-
 @subsection{Inserting Into HAMT}
 
 Inserting into a HAMT involes many of the same operations as
