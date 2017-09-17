@@ -205,7 +205,7 @@ highlighted in green:
 
 @(cimgn "images/hashtree.png")
 
-@subsection{Worst case beahvior}
+@subsection{Worst case behavior}
 
 Note that we have done nothing to improve the worst-case
 behavior of our binary tree. We could still end up in this
@@ -363,8 +363,8 @@ position i in @tt{bitmap} is a 1 (i.e., @tt{(bitmap & 0x01
 bucket i is occupied. We will lay out @tt{data} such that
 its length is equal to the number of occurrences of 1 in the
 binary representation of @tt{bitmap}. The ith index into
-@tt{data} will be regarded as the bucket occuppied by the
-ith occurrence of 1 in the binary represetation of @tt{
+@tt{data} will be regarded as the bucket occupied by the
+ith occurrence of 1 in the binary representation of @tt{
  bitmap}.
 
 This is tricky, so here's a picture:
@@ -421,7 +421,7 @@ Nodes are represented by a templated C++ class @tt{KV<K,V,d>}, where:
  ]
 
 The last parameter deserves some explanation. Imagine how
-nodes are be impelemented. At each depth in the HAMT, a node
+nodes are be implemented. At each depth in the HAMT, a node
 handles a 6-bit piece of a 64-bit hash. In our
 implementation, the root node (which we'll implement soon as
 a class called @tt{hamt}) will hold 4 of those bits, while
@@ -660,7 +660,7 @@ static const V* inner_find(const KVtype& kv, const u64 h, const K* const key)
 Note that we right shift the bitmap by one, because the
 lowest bit will be set to zero or one based on the tagging
 scheme discussed above. We use the @tt{__builtin_popcountll}
-function to calcualte @tt{popcount} in an efficient way. The
+function to calculate @tt{popcount} in an efficient way. The
 compiler will then either generate architecture-specific
 instructions, or (if compiling for an architecture where
 @tt{popcount} has not been implement) an optimized set of
