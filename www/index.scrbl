@@ -94,7 +94,7 @@ exhausting memory.
 
 We can reduce the runtime and space overhead to @${O(1)} by
 switching our implementation to using association lists.
-Association lists are linked lists made up of key-value
+Association ls are linked lists made up of key-value
 pairs. To lookup an element in an association list, we
 simply walk down the list until we find an element with the
 corresponding key and return its value. Insertion is simple,
@@ -119,7 +119,7 @@ lookups. Still, we'll see that an association list is a
 useful component for building a more efficient persistent
 map, so let's start by implementing it.
 
-@subsection{Implementing association lists}
+@subsection[#:tag "linkedlist"]{Implementing association lists}
 
 Let's see how we might implement association lists. First,
 we're going to represent each individual link as a key,
@@ -260,7 +260,7 @@ to keep a key-value association list, because it's always
 possible to have hash collisions. However, the likelihood of
 that happening with a good hash function is relatively low.
 
-@subsubsection{A few optimizations}
+@subsection{A few optimizations}
 
 Our trie now avoids the worst-case behavior we observed with
 a sorted binary tree, which appears better in theory, but
@@ -273,7 +273,7 @@ has a few undesirable traits in practice:
   required to traverse all the way down to the leaf just to lookup one key-value pair.}
  ]
 
-@centered{@bold{Reducing the Height}}
+@subsubsection{Reducing the Height}
 
 To solve the first problem, we can simply switch from a
 binary tree to an n-ary tree: in our case, we're going to
@@ -285,11 +285,11 @@ are @tt{0x00} to @tt{0x3F}:
 
 @(cimgn "images/buckets.png")
 
-So now our trie will have a structure like this:
+Now our trie will have a structure like this:
 
 @(cimgn "images/fullbuckets.png")
 
-@centered{@bold{Store the Key-Value Pair When Possible}}
+@subsubsection[#:tag "lazy"]{Build It Lazily}
 
 It turns out that most of the time, our trie won't really
 need to be of depth ten. In fact, in the following scenario,
@@ -345,24 +345,29 @@ configuration:
 
 @(cimgw "images/split.png")
 
-@centered{@bold{Reducing Wasted Memory}}
+@subsubsection[#:tag "compress"]{Reducing the Memory}
 
 When the trie is relatively sparse, assigning 64 buckets to
 each node is inefficient in terms of both space (occupied by
 each node) and time (spent copying memory to allocate new
-nodes).
+nodes). It turns out that we can use a representation trick
+to compress sparse nodes in the trie.
 
-To solve this problem, we'll use a bitmap. Instead of each
-node holding 64 buckets, a node will hold a single 64 bit
-value, @tt{bitmap}, with an array of buckets, @tt{data}.
-Then, if position i in @tt{bitmap} is set, it will represent
-the fact that bucket i is occupied (non-null). Then, we will
-make @tt{data} an array whose length is equal to the number
-of 1s in @tt{bitmap}. The ith index into @tt{data} will be
-regarded as the bucket occuppied by the ith occurrence of 1
-in @tt{bitmap}.
+The key to our trick is to use a bitmap to represent which
+child hashes are being stored by a node. Instead of each
+node holding 64 buckets, a node will hold a single 64-bit
+value, @tt{bitmap}, along with an array of pointers to child
+nodes, @tt{data}. The node will be laid out so that, if
+position i in @tt{bitmap} is a 1 (i.e., @tt{(bitmap & 0x01
+ << i == 1) != 0}), it will represent the fact that the
+bucket i is occupied. We will lay out @tt{data} such that
+its length is equal to the number of occurrences of 1 in the
+binary representation of @tt{bitmap}. The ith index into
+@tt{data} will be regarded as the bucket occuppied by the
+ith occurrence of 1 in the binary represetation of @tt{
+ bitmap}.
 
-This is quite tricky, so here's a picture:
+This is tricky, so here's a picture:
 
 @(cimgw "images/oldvsnew.png")
 
@@ -377,21 +382,292 @@ been inserted into the trie.
 In our new representation we see the bitmap and a @tt{data}
 array of two elements. Because José's hash occupies position
 @tt{0x00} in the old representation, the 0th bit of @tt{
- bitmap} will be set to 1. Similarly, because Sam's record
+ bitmap} will be set to 1. Similarly, because Sam's hash
 occupied position @tt{0x3F} in the old representation, the
 64th bit of @tt{bitmap} will be set.
 
-To access Sam's record, we would go to position 64 in the
-bitmap and check to see that it was set to 1. If it is not,
-no record would exist for Sam in this node. Assuming it is,
-we then count the number of 1s @emph{below} position 64 in
-the bitmap. This operation is called @tt{popcount} (short
-for "population count," which counts the number of 1s in a
-machine word), and built into many modern instruction sets.
-We then use @tt{popcount} to index into @tt{data}.
+To access Sam's record, we lookup position 63 in @tt{bitmap}
+and check to see whether it is set to 1. If not, it will
+signify that no record exists for Sam in this node. Assuming
+it is, we then count the number of 1s @emph{below} position
+64 in the bitmap. This operation is called @tt{popcount()}
+(short for "population count," which counts the number of 1s
+in a machine word), and built into many modern instruction
+sets, so that it executes quite efficiently. We then use
+@tt{popcount} of the part of @tt{bitmap} below the 63th bit
+to index into @tt{data}.
 
 By doing this, we reduce the amount of space stored for each
-node from 64 to @tt{popcount}.
+node from 64 to @tt{popcount(bitmap)}. In practice, this
+means that we get good performance when the trie is sparse,
+and when the trie is dense (i.e., most nodes hold close to
+64 child elements) the performance is no worse than an
+implementation without compression.
 
 @section{Implementing HAMT}
 
+The combination of these techniques gives us the Hash
+Array-Mapped Trie (HAMT). Now we'll step through an
+efficient implementation of HAMT that uses these concepts.
+
+@subsection{The node representation}
+
+Nodes are represented by a templated C++ class @tt{KV<K,V,d>}, where:
+
+@itemlist[
+ @item{@tt{K} is the template parameter for the key's type}
+ @item{@tt{V} is the value's type}
+ @item{@tt{d} is the depth of the node being represented}
+ ]
+
+The last parameter deserves some explanation. Imagine how
+nodes are be impelemented. At each depth in the HAMT, a node
+handles a 6-bit piece of a 64-bit hash. In our
+implementation, the root node (which we'll implement soon as
+a class called @tt{hamt}) will hold 4 of those bits, while
+the 60 remaining bits will be handled by a trie whose
+maximum depth is 10. After depth 10, all values which would
+share the same bucket also share the same hash, and so we
+must devolve into an association list.
+
+To do its work, each inner node in HAMT must know which
+6-bit piece of the hash its working on. We could do this by
+iteratively computing this value as we traverse down the
+nodes, gradually moving from the first four bits (for the
+top level node, which holds four bits), to the second six
+bits, to the third six bits, etc... However, instead, we're
+going to use template metaprogramming to generate a
+template-specialized version of the node class for each
+depth from 1 to 10, meaning that the C++ compiler will
+generate @tt{KV<K,V,0>} through @tt{KV<K,V,9>} for us using
+our template, and we will manually instantiate @tt{
+ KV<K,V,10>} by hand to be our node implementation that uses
+an association list. In essence, we have traded an addition
+at @emph{runtime} for a specialization of the code at @emph{
+ compile time}.
+
+It's worth noting that we could do this without template
+metaprogramming, but we would have to manually write out the
+code to operate on each six bit sequence from 1 to 10
+ourselves, which would be significantly messy.
+
+Here's the C++ code representation for our inner nodes:
+
+@codeblock[#:line-numbers 1]|{
+// A key-value pair; this is both one row in Bagwell's underlying AMT
+// or a buffer of such KV rows in an internal node of the data structure
+template <typename K, typename V, unsigned d>
+class KV
+{
+    typedef KV<K,V,d> KVtype;
+    typedef KV<K,V,d+1> KVnext;
+
+public:
+    // We use two unions and the following cheap tagging scheme:
+    // when the lowest bit of Key k is 0, it's a key and a K*,V* pair (key and value),
+    // when the lowest bit of Key k is 1, it's either a bm (bitmap) in the top 63 bits with a
+    // KV<K,V,d+1>* v inner node pointer when d is less than 9 or it's just a 1 and a pointer to a
+    // LL<K,V>* for collisions
+    union Key
+    {
+        const u64 bm;
+        const K* const key;
+
+        Key(const K* const key) : key(key) { }
+        Key(const u64 bm) : bm(bm) { }
+    } k;
+
+    union Val
+    {
+        const KVnext* const node;
+        const V* const val;
+
+        Val(const KVnext* const node) : node(node) { }
+        Val(const V* const val) : val(val) { }
+    } v;
+    // ...
+}
+}|
+
+We use C++ unions to allow this node to either be a
+key-value pair, or an inner node, to implement the trick in
+section @secref["lazy"]. There are two possibilities for this node:
+
+@itemlist[
+ @item{It is a single key-value pair. In this case, we will
+  set the lowest bit of @tt{k} to 0. The upper bits of k will
+  be a pointer to the key, which we can use on subsequent
+  lookups. The reason we can do this is that pointers to keys
+  will always be aligned, so that the lowest bit will never be
+  zero. @tt{v} will then be a pointer to the value being
+  stored. }
+
+ @item{It's a node containing buckets. In this case, we will
+  set the lowest bit of @tt{k} to 1. The rest of @tt{k} will
+  be a bitmap containing 63 bits, and @tt{v} will serve the
+  place of the @tt{data} array discussed in section
+  @secref["compress"]}
+ ]
+
+The lowest level of our HAMT will be a key-value association
+list, using the linked list we implemented in section
+@secref["linkedlist"]:
+
+@codeblock[#:line-numbers 1]|{
+// A template-specialized version of KV<K,V,d> for the lowest depth of inner nodes, d==bd
+// After this we have exhausted our 64 bit hash (4 bits used by the root and 6*10 bits used by inner nodes)
+template <typename K, typename V>
+class KV<K,V,bd>
+{
+    typedef LL<K,V> LLtype;
+    typedef KV<K,V,bd> KVbottom;
+
+public:
+    // We use two unions and the following cheap tagging scheme:
+    // when the lowest bit of Key k is 0, it's a key and a K*,V* pair (key and value),
+    // when the lowest bit of Key k is 1, it's either a bm (bitmap) in the top 63 bits with a
+    // KVnext* v inner node pointer when d is less than bd-1 or it's just a 1 and a pointer to a
+    // LL<K,V>* for collisions (In this case we use LL<K,V>*)
+    union Key
+    {
+        const u64 bm;
+        const K* const key;
+
+        Key(const K* const key) : key(key) { }
+        Key(const u64 bm) : bm(bm) { }
+    } k;
+
+    union Val
+    {
+        const LLtype* const list;
+        const V* const val;
+
+        Val(const LLtype* const ll) : list(ll) { }
+        Val(const V* const val) : val(val) { }
+    } v;
+    // ...
+}
+}|
+
+The toplevel @tt{hamt} data structure will hold the first
+four bits of the hash, and each element of @tt{data} will
+hold either a key-value pair or an inner node:
+
+@codeblock[#:line-numbers 1]|{
+// A simple hash-array-mapped trie implementation (Bagwell 2001)
+// Garbage collected, persistent/immutable hashmaps
+template<typename K, typename V>
+class hamt
+{
+    typedef KV<K,V,0> KVtop;
+
+private:
+    // We use up to 4 bits of the hash for the root, then the
+    // other 10*6bits are used for inner nodes up to 10 deep
+    KVtop data[7];
+    u64 count;
+
+public:
+    hamt<K,V>()
+        : data{}, count(0)
+    {}
+    // ...
+}
+}|
+
+@subsection{Finding a key-value pair in HAMT}
+
+To find a key-value pair in HAMT, we start at the topmost
+node and check the first four bits to find which top-level
+bucket the value is stored in:
+
+@codeblock[#:line-numbers 1]|{
+const V* get(const K* const key) const
+{
+    // type K must support a method u64 hash() const;
+    const u64 h = key->hash();
+    const u64 hpiece = (h & 0xf) % 7;
+
+    if (this->data[hpiece].k.bm == 0)
+        // It's a zero, return null for failure
+        return 0;
+    else if ((this->data[hpiece].k.bm & 1) == 0)
+    {
+        // It's a key/value pair, check for equality
+        if (*(this->data[hpiece].k.key) == *key)
+        {
+            return this->data[hpiece].v.val;
+        }
+        else
+            return 0;
+    }
+    else
+        // It's an inner node
+        return KVtop::inner_find(this->data[hpiece], h >> 4, key);
+}                              
+}|
+
+We use the first four bits of the hash to calculate which
+index of @tt{data} to look at next. The lowest bit of the
+corresponding key for @tt{data[hpiece]} is then used to
+check if that bucket contains a key-value pair directly--in
+which case the key is directly checked and the value
+returned--or to see if @tt{data[hpiece]} contains an inner
+node, in which case we delegate to that node's @tt{
+ inner_find}. Note that @tt{inner_find} is called with the
+hash shifted by four.
+
+@subsubsection{Lookup from an inner node}
+
+Internal nodes look at six bit sequences of the hash from
+the 5th bit to the 64th bit in the hash. By convention, we
+assume that @tt{inner_find} will only look at the bottom six
+bits of the hash, and that it will always be called in such
+a way that the bits have been shifted appropriately:
+
+@codeblock[#:line-numbers 1]|{
+// This is the find algorithm for internal nodes
+// Given a KV row pointing to an inner node, returns the V* for a given h and key pair or 0 if none exists
+static const V* inner_find(const KVtype& kv, const u64 h, const K* const key)
+{
+    const u64 hpiece = (h & 0x3f) % 63;
+
+    // bm is the bitmap indicating which elements are actually stored
+    // count is how many KV elements this inner node stores (popcount of bm)
+    // i is hpiece's index; i.e., how many KV elements *preceed* index hpiece
+    const KVnext* const data = kv.v.node;
+    const u64 bm = kv.k.bm >> 1;
+
+    const bool exists = bm & (1UL << hpiece);
+    if (exists)
+    {
+        const u32 i = __builtin_popcountll((bm << 1) << (63 - hpiece));
+        if ((data[i].k.bm & 1) == 0)
+        {
+            if (*(data[i].k.key) == *key)
+                return data[i].v.val;
+            else
+                return 0;
+        }
+        else
+            return KVnext::inner_find(data[i], h >> 6, key);
+    }
+    else
+        return 0;
+}
+}|
+
+Note that we right shift the bitmap by one, because the
+lowest bit will be set to zero or one based on the tagging
+scheme discussed above. We use the @tt{__builtin_popcountll}
+function to calcualte @tt{popcount} in an efficient way. The
+compiler will then either generate architecture-specific
+instructions, or (if compiling for an architecture where
+@tt{popcount} has not been implement) an optimized set of
+assembly instructions to do so. We then use the result of
+@tt{popcount} to look up the corresponding index in @tt{
+ data}, and perform the lookup for the key-value pair or
+again delegate to @tt{inner_find}.
+
+@subsection{Lookup From an Association List}
+ 
