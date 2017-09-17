@@ -669,5 +669,21 @@ assembly instructions to do so. We then use the result of
  data}, and perform the lookup for the key-value pair or
 again delegate to @tt{inner_find}.
 
-@subsection{Lookup From an Association List}
+@subsubsection{Lookup From an Association List}
+
+
+@subsubsection{Lookup From an Association List}
+
+@subsection{Inserting Into HAMT}
+
+Inserting into a HAMT involes many of the same operations as
+searching for a key-value pair. The main changes are to:
+
+@itemlist[
+ @item{Allocate memory for new pieces of the HAMT and copy
+  pieces of the original HAMT.}
+ @item{Break apart parts of the HAMT when collisions happen
+  on parts of the hash to build the HAMT lazily as described in section @secref["lazy"].}
+ ]
+
  
