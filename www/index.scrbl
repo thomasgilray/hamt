@@ -8,6 +8,16 @@
 @(define (capitalize-first-letter str)
   (regexp-replace #rx"^." str string-upcase))
 
+@;@(define (cbold str)
+@;  (centered (bold str)))
+
+@; See how I used unquote-splicing here like a Racket pro
+@(define (kris . comment)
+  (apply string-append `("(Kris: " ,@comment ")")))
+
+@(define (tom . comment)
+  (apply string-append `("(Kris: " ,@comment ")")))
+
 @; This is a total hack. I don't know how to get Scribble to allow me 
 @; manipulate the width of rendered images. Might have to pay with
 @; scribble/html?
@@ -30,121 +40,98 @@
 
 @section{Motivation: Persistent Maps}
 
-Let's first illustrate why we might want a persistent map.
-Mutable maps, typically implemented as hash tables,
-are used in many applications throughout computing.
-For example, we might implement a phone book as a
-mutable map:
+Let's say we wanted to implement a phonebook using a mutable map:
 
 @(cimgn "images/map1.png")
 
-This allows us to quickly look up a phone number for all
-the friends we care about, even if we have thousands of
-friends in our phonebook. When someone's number changes, we
-would make a corresponding change to the map:
+When a friend's number changes, we would make a corresponding change
+to the map:
 
 @(cimgn "images/map2.png")
 
-This works for a single person, but imagine that I'm a city
-recordkeeper. Along with knowing each person's phone number
-today, I also want to be able to look up what their number
-was at any given time in the past. What I really want is a list of
-these phonebooks, and a time slider to tell me who had what
-number on a given day:
+Now imagine I want to keep a history of my phonebook. What I really
+want is a time slider that allows me to see the state of the phonebook
+at any point in time:
 
 @(cimgw "images/maptime.png")
 
-I need a map implementation that supports a special type of
-@tt{insert} operation; one that returns a new map containing
-all the same pairs as the old one, except for the newly inserted
-pair or update to an existing pair. That is, I want a functional
-insert operation that consumes and produces immutable hashmaps.
+The problem with a mutable map is that I invalidate older copies of
+the phonebook when I update keys that exist in the phonebook at
+earlier times. I need a data structure that supports:
 
+@itemlist[
 
-@section{Towards a solution}
+ @item{@tt{insert(key,value)}, which gives me back a new map
+  containing all the same pairs as the old one, except for the newly
+  inserted pair, or update to existing pair. That is, I want a
+  functional insert operation that consumes and produces immutable
+  maps.}
 
-The first thing we might try is to simply copy the mutable
-hash table and change the relevant element upon each
-insertion. Now @tt{insert} looks like this:
+@item{@tt{lookup(map,key)}, that looks up a record in the map. This
+  should run in near-constant time.}
+
+ @item{@tt{delete(map,key)}, that removes a record from the map. Just
+ like @tt{insert}, this should both consume and produce a functional
+ map.}
+]
+
+We can use a mutable map (as we did above) to meet the functional
+requirements of this API:
 
 @(cimgn "images/copymap.png")
 
-But there are major problems with this. Let's think about
-the runtime and space complexity of the two relevant
-operations we want to perform, @tt{insert(k,v)} and @tt{
- lookup(k)}:
-@tabular[#:style 'boxed
-         #:sep @hspace[1]
- (list (list @bold{Operation} @bold{Runtime} @bold{Space overhead})
-       (list @tt{insert}  ($ "O(n)") ($ "O(n)"))
-       (list @tt{lookup}  ($ "O(1)") "-"))
-       ]
+But insertion and deletion both require cloning the mutable hash
+table. This incurs both linear time and linear space, which falls far
+short of what we'd like.
 
-Insertion runtime complexity is linear in the number of
-entries in the map because to insert an item, we first have
-to copy the entire table into a newly allocated chunk of
-memory. This also incurs space overhead linear in the size
-of the table.
+@; Really need this to be a subsection? Or blow away this header?
+@subsection{Towards a solution: association lists}
 
-This solution would work well if we had to make copies of
-the map only occasionally, but if we were doing so
-routinely, our system would be both relatively slow and take
-up a lot of space. If the phonebook grew relatively large,
-and we had frequent edits, we might quickly end up
-exhausting memory.
+We can reduce space overhead to @${O(1)} by switching to using
+association lists.  Association lists are linked lists made up of
+key-value pairs. To perform @tt{lookup(map,k)}, we walk down the links
+of @tt{map} until we find a link with the corresponding key.
 
-We can reduce the runtime and space overhead to @${O(1)} by
-switching our implementation to using association lists.
-Association lists are linked lists made up of key-value
-pairs. To lookup an element in an association list, we
-simply walk down the list until we find an element with the
-corresponding key and return its value.
+To perform @tt{insert(map,k,v)}, we first traverse each link of
+@tt{map} (as in @tt{lookup}) to ensure that no pair for @tt{key}
+exists. If it does not, we prepend a link which contains @tt{k,v} and
+then links to @tt{map}:
 
-Insertion can be done in two ways. First, we may simply
-prepend a new key-value pair to the list allowing it to hide
-the older binding:
-
-@(cimgn "images/assoclist.png")
-
-This association list uses sharing to achieve both constant
-time and space complexity for insertion. But to lookup a
-value, we potentially need to go far down into the
-association list, including over many duplicate keys.
-Now our complexity looks like:
-
-@tabular[#:style 'boxed
-         #:sep @hspace[1]
- (list (list @bold{Operation} @bold{Runtime} @bold{Space overhead})
-       (list @tt{insert}  ($ "O(1)") ($ "O(1)"))
-       (list @tt{lookup}  ($ "O(m)") "-")
-       (list @tt{remove}  ($ "O(m)") ($ "O(m)"))
-       )]
-
-(Here @($ "m") refers to the total number of prior inserts, not the number of visible key-value pairs @($ "n").) 
-This is good if we do frequent copies but infrequent
-lookups, removes, and updates to old values. An alternative implementation would traverse the list at each
-insert to be sure duplicate keys are not building up. In this case, the first matching key can be replaced,
-the tail of the list after it (...) can be reused, and the front of the list must be rebuilt:
+@kris{I don't get this image: why is "Kelly" the second link?
+Is my descrption wrong? It might be, because I've merged these two
+ways of doing it to focus on one.}
 
 @(cimgn "images/assoclist2.png")
 
-This means our lookup times can be in @($ "O(n)"), but then so are our insert, remove and space overheads.
+If @tt{key} exists in @tt{map}, we need to modify our approach
+slightly, so that we allocate a new cell for @tt{k,v} and splice it
+into the list in the appropriate location (while leaving @tt{map}
+alone).
+
+This means our lookup times can be in @($ "O(n)"), but then so are our
+insert, remove and space overheads. But in return, we exploit
+@emph{sharing}, so that insertions and deletions reuse most of the
+links of the previous map, only adding a single new link to hold the
+incremental change to the map. @kris{This needs cleanup.}
 
 @tabular[#:style 'boxed
          #:sep @hspace[1]
  (list (list @bold{Operation} @bold{Runtime} @bold{Space overhead})
-       (list @tt{insert}  ($ "O(n)") ($ "O(n)"))
+       (list @tt{insert}  ($ "O(n)") ($ "O(1)"))
        (list @tt{lookup}  ($ "O(n)") "-")
-       (list @tt{remove}  ($ "O(n)") ($ "O(n)"))
+       (list @tt{remove}  ($ "O(n)") ($ "O(1)"))
        )]
 
-Still, despite these poor complexity bounds, we'll see that an association list is a
-useful component and illustrates the value of persistence for this data structure. Although our operations
-are no longer efficient, they are over immutable data only and in typical cases the common tails
-of distinct association lists may be shared---a central benefit of persistance.
-
+We'll see that exploiting sharing is a key ingredient to implementing
+efficient persistent datastructures.  To obtain an efficient
+persistent map, we'll use several tiers of hashmaps, along with
+sharing between those tiers. At the final tier we'll use an
+association list, as we would in a regular hashmap, to account for the
+possibility of hash collisions.
 
 @subsection[#:tag "linkedlist"]{Implementing association lists}
+
+@kris{Overall: can we switch to 2-space tabs for C++ code?}
 
 Let's see how we might implement these association lists. First,
 we're going to represent each individual link as a key,
@@ -208,13 +195,17 @@ from the Boehm garbage collector.
     const LLtype* insert(const K* const k, const V* const v) const
     {
         if (*(this->k) == *k)
-            return new ((LLtype*)GC_MALLOC(sizeof(LLtype))) LLtype(this->k, v, next);
+            return new ((LLtype*)GC_MALLOC(sizeof(LLtype)))
+                         LLtype(this->k, v, next);
         else if (next)
-            return new ((LLtype*)GC_MALLOC(sizeof(LLtype))) LLtype(this->k, this->v, next->insert(k, v));
+            return new ((LLtype*)GC_MALLOC(sizeof(LLtype)))
+                       LLtype(this->k, this->v, next->insert(k, v));
         else
         {
-            const LLtype* const link1 = new ((LLtype*)GC_MALLOC(sizeof(LLtype))) LLtype(this->k, this->v, 0);
-            const LLtype* const link0 = new ((LLtype*)GC_MALLOC(sizeof(LLtype))) LLtype(k, v, link1);
+            const LLtype* const link1 =
+              new ((LLtype*)GC_MALLOC(sizeof(LLtype))) LLtype(this->k, this->v, 0);
+            const LLtype* const link0 =
+              new ((LLtype*)GC_MALLOC(sizeof(LLtype))) LLtype(k, v, link1);
             return link0;                
         }
     }
@@ -223,7 +214,6 @@ from the Boehm garbage collector.
 In the case where the current link doesn't match but has a non-null tail, the current node is rebuilt to refer to whatever
 @tt{LLtype} pointer is returned from a recursive insert (line 6). If the end of the list is reached with no key found,
 we may insert the new element on the front or back of the list. In this case we show the latter for simplicity.
-
 
 @section{Next: Trees and Tries}
 
