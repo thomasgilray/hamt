@@ -32,13 +32,13 @@
 
 Let's first illustrate why we might want a persistent map.
 Mutable maps, typically implemented as hash tables,
-naturally appear in many applications throughout computing.
-For example, we might imagine implementing a phone book as a
+are used in many applications throughout computing.
+For example, we might implement a phone book as a
 mutable map:
 
 @(cimgn "images/map1.png")
 
-This allows us to quickly look up phone numbers for all of
+This allows us to quickly look up a phone number for all
 the friends we care about, even if we have thousands of
 friends in our phonebook. When someone's number changes, we
 would make a corresponding change to the map:
@@ -48,22 +48,23 @@ would make a corresponding change to the map:
 This works for a single person, but imagine that I'm a city
 recordkeeper. Along with knowing each person's phone number
 today, I also want to be able to look up what their number
-was at a given time. What I really want is a long stream of
+was at any given time in the past. What I really want is a list of
 these phonebooks, and a time slider to tell me who had what
 number on a given day:
 
 @(cimgw "images/maptime.png")
 
-I need my map implementation to support a special type of
-@tt{insert} operation, which returns a new map that contains
-all of the same elements as the old one, except for the new
-element I'm inserting.
+I need a map implementation that supports a special type of
+@tt{insert} operation; one that returns a new map containing
+all the same pairs as the old one, except for the newly inserted
+pair or update to an existing pair. That is, I want a functional
+insert operation that consumes and produces immutable hashmaps.
 
 
 @section{Towards a solution}
 
 The first thing we might try is to simply copy the mutable
-hash table and change the relevant element upon an
+hash table and change the relevant element upon each
 insertion. Now @tt{insert} looks like this:
 
 @(cimgn "images/copymap.png")
@@ -94,34 +95,58 @@ exhausting memory.
 
 We can reduce the runtime and space overhead to @${O(1)} by
 switching our implementation to using association lists.
-Association ls are linked lists made up of key-value
+Association lists are linked lists made up of key-value
 pairs. To lookup an element in an association list, we
 simply walk down the list until we find an element with the
-corresponding key and return its value. Insertion is simple,
-we prepend a new key-value pair to the list:
+corresponding key and return its value.
+
+Insertion can be done in two ways. First, we may simply
+prepend a new key-value pair to the list allowing it to hide
+the older binding:
 
 @(cimgn "images/assoclist.png")
 
-The association list uses sharing to achieve both constant
+This association list uses sharing to achieve both constant
 time and space complexity for insertion. But to lookup a
 value, we potentially need to go far down into the
-association list. So our table now looks like:
+association list, including over many duplicate keys.
+Now our complexity looks like:
 
 @tabular[#:style 'boxed
          #:sep @hspace[1]
  (list (list @bold{Operation} @bold{Runtime} @bold{Space overhead})
        (list @tt{insert}  ($ "O(1)") ($ "O(1)"))
-       (list @tt{lookup}  ($ "O(n)") "-"))
-       ]
+       (list @tt{lookup}  ($ "O(m)") "-")
+       (list @tt{remove}  ($ "O(m)") ($ "O(m)"))
+       )]
 
+(Here @($ "m") refers to the total number of prior inserts, not the number of visible key-value pairs @($ "n").) 
 This is good if we do frequent copies but infrequent
-lookups. Still, we'll see that an association list is a
-useful component for building a more efficient persistent
-map, so let's start by implementing it.
+lookups, removes, and updates to old values. An alternative implementation would traverse the list at each
+insert to be sure duplicate keys are not building up. In this case, the first matching key can be replaced,
+the tail of the list after it (...) can be reused, and the front of the list must be rebuilt:
+
+@(cimgn "images/assoclist2.png")
+
+This means our lookup times can be in @($ "O(n)"), but then so are our insert, remove and space overheads.
+
+@tabular[#:style 'boxed
+         #:sep @hspace[1]
+ (list (list @bold{Operation} @bold{Runtime} @bold{Space overhead})
+       (list @tt{insert}  ($ "O(n)") ($ "O(n)"))
+       (list @tt{lookup}  ($ "O(n)") "-")
+       (list @tt{remove}  ($ "O(n)") ($ "O(n)"))
+       )]
+
+Still, despite these poor complexity bounds, we'll see that an association list is a
+useful component and illustrates the value of persistence for this data structure. Although our operations
+are no longer efficient, they are over immutable data only and in typical cases the common tails
+of distinct association lists may be shared---a central benefit of persistance.
+
 
 @subsection[#:tag "linkedlist"]{Implementing association lists}
 
-Let's see how we might implement association lists. First,
+Let's see how we might implement these association lists. First,
 we're going to represent each individual link as a key,
 value, and pointer to next node. We want the key and value
 to be of arbitrary types, so we're going to use C++
@@ -139,33 +164,71 @@ public:
     const LLtype* const next;
 
     LL<K,V>(const K* k, const V* v, const LLtype* next)
-    : k(k), v(v), next(next)
+        : k(k), v(v), next(next)
     { }
 
     const V* find(const K* const k) const;
 
-    const LLtype* insert(const K* const k, const V* const v, u64* const cptr) const;
+    const LLtype* insert(const K* const k, const V* const v) const;
 
-    const LLtype* remove(const K* const k, u64* const cptr) const;
+    const LLtype* remove(const K* const k) const;
 }
 }|
 
-Note on lines 7-9 that all of our pointers have constant
-specifiers, meaning we won't be able to change the data
+Note on lines 7-9 that all of our pointer types have @tt{const}
+qualifiers, meaning we won't be able to modify the data
 being pointed at, or the pointers to the keys and values
 themselves. This is exactly the behavior we want for our
-association list, imagine how confusing it would be if we
-built a subsequent association list, and then someone
-changed one of the values out from under us!.
+association list; otherwise, sharing portions of old association
+lists would be impossible as modifying them could modify all
+maps that had previously been derived from them. Our constructor
+therefore initializes fields and nothing else.
 
-This section not yet finished...
+A find or lookup algorithm is defined as a straightforward traversal
+that returns a @tt{const V*} or null pointer.
+
+@codeblock[#:line-numbers 1]|{
+    const V* find(const K* const k) const
+    {
+        if (*(this->k) == *k)
+            return v;
+        else if (next)
+            return next->find(k);
+        else
+            return 0;
+    }
+}|
+
+The insert algorithm descends the association list checking for a matching key (line 3). If it matches,
+we rebuilt the current node using an updated value @tt{LLtype(this->k, v, next)} (line 4) and @emph{placement new}
+syntax @tt{new ((T*)ptr) T(...)} which constructs a value at an existing location---in this case, new memory obtained
+from the Boehm garbage collector.
+
+@codeblock[#:line-numbers 1]|{
+    const LLtype* insert(const K* const k, const V* const v) const
+    {
+        if (*(this->k) == *k)
+            return new ((LLtype*)GC_MALLOC(sizeof(LLtype))) LLtype(this->k, v, next);
+        else if (next)
+            return new ((LLtype*)GC_MALLOC(sizeof(LLtype))) LLtype(this->k, this->v, next->insert(k, v));
+        else
+        {
+            const LLtype* const link1 = new ((LLtype*)GC_MALLOC(sizeof(LLtype))) LLtype(this->k, this->v, 0);
+            const LLtype* const link0 = new ((LLtype*)GC_MALLOC(sizeof(LLtype))) LLtype(k, v, link1);
+            return link0;                
+        }
+    }
+}|
+
+In the case where the current link doesn't match but has a non-null tail, the current node is rebuilt to refer to whatever
+@tt{LLtype} pointer is returned from a recursive insert (line 6). If the end of the list is reached with no key found,
+we may insert the new element on the front or back of the list. In this case we show the latter for simplicity.
+
 
 @section{Next: Trees and Tries}
 
-One of the most standard data structures in the functional
-programmer's arsenal is the sorted tree. Trees give you nice
-logarithmic runtime and offer efficient persistence by
-sharing nodes:
+A standard data structure in any programmer's arsenal is the sorted tree.
+Trees give you nice logarithmic runtime costs when balanced.
 
 @(cimgn "images/tree.png")
 
@@ -179,27 +242,28 @@ of techniques exist to avoid this worst-case behavior. For
 example,
 @link["https://en.wikipedia.org/wiki/Red%E2%80%93black_tree"]{
  Red-Black trees} automatically rebalance upon each @tt{
- insert} operation.
+ insert} operation. Unfortunately, this requires mutability so
+ an existing tree may be rewired into a more balanced version of itself.
 
-One way of constructing a constructing a balanced binary
-tree probabilistically (most of the time) is to randomize
-the elements before inserting them. This avoids the
-worst-case behavior of inserting elements in sorted order.
-One way to do this would be to hash each key and insert into
-the tree based on that hash. This won't immediately buy us a
-performance improvement, but it will get us closer to the
-core design of HAMT. Each node in the tree is now a:
+A way of constructing a balanced binary tree probabilistically
+would be to randomize elements before inserting them. This would
+avoid the worst-case behavior of inserting elements in sorted order.
+A way to effect this kind of probabalistic balancing, but without changing
+insertion order, would be to hash each key and insert into
+the tree based on its hash. So long as we only care to match keys
+exactly and do not need to exploit an ordering on keys, this is a
+sound alternative. Each node in the tree is now a:
 
 @itemlist[
  @item{A pointer to the left and right subtrees}
- @item{A hash of the key for that cell}
+ @item{A hash of the key for that cell, and}
  @item{A pointer to a linked list of key-value pairs}
 ]
 
 The reason for the last item is that hashes have the
 possibility of @emph{collision}: two values can hash to the
 same thing. If we use a sufficiently large hash, and a good
-hash function, this will happen rarely. Here's an example of
+hash function, this will happen only rarely. Here's an example of
 what our hash-tree looks like, with the linked lists
 highlighted in green:
 
@@ -216,14 +280,14 @@ scenario (note that the linked lists are elided):
 This means that the complexity of operations on our tree is
 @emph{still} @($ "O(n)"). Let's tackle that next.
 
-@subsection{From trees to tries}
+@subsection{From sorted trees to tries (prefix trees)}
 
 Turning our sorted tree into a hash-tree doesn't buy us any
 performance improvement, but it helps us make our way
 towards exploiting some of the unique properties of the
 hash-tree.
 
-Hashes form a very natural prefix-ordering:
+Hashes naturally form a common-prefix ordering:
 
 @(cimgn "images/prefixnums.png")
 
@@ -233,37 +297,41 @@ binary tree:
 
 @(cimgn "images/numbertrie.png")
 
-However, note that if we force our tree to be a trie, it is
-@emph{not} possible to represent the worst-case
+However, note that if we force our tree to be a trie (pronounced "try"),
+it is @emph{not} possible to represent the worst-case
 configuration shown above: @tt{0x00000001} is not a prefix
-of @tt{0x00000002}.
+of @tt{0x00000002}. 
+
+@;I am not understanding this point, or generally the point about the worst-case being O(n). It is for our
+@;final HAMT design as well. I think good stochastic complexity is the best we can do and is just fine... 
+
 
 @subsubsection{Exploiting the Trie}
 
 If we force our trees to be tries, and assuming we use a
-64-bit hash, we can reduce the maximum size of our trees
-from @($ "O(n)") to 64! The way we do it is to represent our
+64-bit hash, we can reduce the maximum depth of our trees
+from @($ "O(n)") to just 64! The way we do this is to represent our
 key-value pairs using a trie, where each node represents a
-@emph{partial} hash. Note that--for now--we have left off
+@emph{partial} hash, a prefix. Note that--for now--we have left off
 the value component of the key-value pairs and are simply
-drawing the hashes, we will get back to that shortly.
+drawing the hashes. We will get back to that shortly.
 @; This text needs major fixing since it feels rough.
 
 @(cimgw "images/binarytrie.png")
 
 Notice that each child node is arranged such that it is a
 prefix of its parent. Our trie can be viewed as a decision
-tree, answering the question, "is the next bit zero or one?"
-Because we only have a 64-bit hash, our trie will have depth
-64! Keep in mind that at the leaf nodes, we will still have
-to keep a key-value association list, because it's always
-possible to have hash collisions. However, the likelihood of
-that happening with a good hash function is relatively low.
+tree, at each step answering the question, "is the next bit zero or one?"
+Keep in mind that, at leaf nodes, we will still have
+to keep a key-value association list. It remains possible for us
+to have (improbable) hash collisions.
+
 
 @subsection{A few optimizations}
 
 Our trie now avoids the worst-case behavior we observed with
 a sorted binary tree, which appears better in theory, but
+@; better in theory? How so? Ordering? Some of your thinking on trees vs tries isn't making sense to me I think.
 has a few undesirable traits in practice:
 
 @itemlist[
@@ -278,7 +346,7 @@ has a few undesirable traits in practice:
 To solve the first problem, we can simply switch from a
 binary tree to an n-ary tree: in our case, we're going to
 hold 64 "buckets" at each node, rather than 2. By doing
-this, we'll lower the maximum depth of our tree to be 10.
+this, we lower the maximum depth of our tree (to 10-11).
 Instead of each node deciding whether a bit will be a 0 or a
 1, each node will decide whether the next 6 bits of the hash
 are @tt{0x00} to @tt{0x3F}:
@@ -289,8 +357,11 @@ Now our trie will have a structure like this:
 
 @(cimgn "images/fullbuckets.png")
 
+
 @subsubsection[#:tag "lazy"]{Build It Lazily}
 
+@; Lazy seems like a heavyweight idea to employ here, can't we just make this one subsection
+@; and say we only extend the trie as necessary. I wouldn't call this "laziness" at all...
 It turns out that most of the time, our trie won't really
 need to be of depth ten. In fact, in the following scenario,
 we'd waste a lot of time traversing pointers:
@@ -298,8 +369,8 @@ we'd waste a lot of time traversing pointers:
 @(cimgn "images/wasted.png")
 
 This is because each key occupies a different bucket for the
-top level node. In fact, we could instead just a
-configuration like the following:
+top level node. In fact, we could just use a
+configuration like the following instead:
 
 @(cimgn "images/lesswasted.png")
 
@@ -308,8 +379,8 @@ key-value pair as close to the top as possible until it has
 to keep things separate.
 
 To do that, the nodes in our trie will either hold 64
-buckets of child nodes, or will hold an association list of
-key-value pairs. Remember, they can't possibly hold one
+buckets for child nodes, or will hold an association list of
+key-value pairs. Remember, they can't possibly hold one @; they can possibly and do in our final implementation...
 unique key-value pair because hash collisions are always
 possible. This optimizes our trie so that in cases that we
 don't @emph{need} additional depth, we won't be using it.
@@ -319,11 +390,13 @@ This means that--probabilistically--we'll be holding most
 things closer to the top until the map is holding a lot of
 key-value pairs.
 
+@; I really think the better way to put this is that we're using a union
+@; to make our representation more compact... nothing is happening "lazily" in the normal sense
 One way to think about this is that we will build the nodes
 in our trie lazily, only using as many bits of the hash as
 we need. If we can differentiate all of the hashes of our
 key-value pairs using their first six bits, we will only
-have one "layer" of the trie that we need to traverse until
+have one "layer" of the trie that we need to traverse untilxs
 we reach the data we want to access.
 
 If we lay out our trie in this manner, we need to be careful
@@ -345,26 +418,29 @@ configuration:
 
 @(cimgw "images/split.png")
 
+
 @subsubsection[#:tag "compress"]{Reducing the Memory}
 
 When the trie is relatively sparse, assigning 64 buckets to
 each node is inefficient in terms of both space (occupied by
 each node) and time (spent copying memory to allocate new
-nodes). It turns out that we can use a representation trick
+nodes). It turns out that we can use a low-level trick
 to compress sparse nodes in the trie.
 
-The key to our trick is to use a bitmap to represent which
-child hashes are being stored by a node. Instead of each
+The trick is to use a bitmap to represent which
+child hashes are actually stored in a node. Instead of each
 node holding 64 buckets, a node will hold a single 64-bit
-value, @tt{bitmap}, along with an array of pointers to child
-nodes, @tt{data}. The node will be laid out so that, if
-position i in @tt{bitmap} is a 1 (i.e., @tt{(bitmap & 0x01
- << i == 1) != 0}), it will represent the fact that the
+value, @tt{bitmap}, along with a variable-length buffer of
+pointers to child nodes, @tt{data}. The node will be laid out
+so that, if position i in @tt{bitmap} is a 1
+(i.e., @tt{bitmap & (0x01 << i) > 0}),
+@; this expression was previously wrong; it wouldn't equal 1 if it was 2^n
+it will represent the fact that the
 bucket i is occupied. We will lay out @tt{data} such that
-its length is equal to the number of occurrences of 1 in the
+its length is equal to the number of 1s in the
 binary representation of @tt{bitmap}. The ith index into
 @tt{data} will be regarded as the bucket occupied by the
-ith occurrence of 1 in the binary representation of @tt{
+(i+1)th occurrence of 1 in the binary representation of @tt{
  bitmap}.
 
 This is tricky, so here's a picture:
@@ -384,13 +460,15 @@ array of two elements. Because José's hash occupies position
 @tt{0x00} in the old representation, the 0th bit of @tt{
  bitmap} will be set to 1. Similarly, because Sam's hash
 occupied position @tt{0x3F} in the old representation, the
-64th bit of @tt{bitmap} will be set.
+63th bit of @tt{bitmap} will be set.
+@; You can't have a 0th bit and 64th bit both in a 64 bit
+@; value! Either counting starts at 0 or at 1...
 
 To access Sam's record, we lookup position 63 in @tt{bitmap}
 and check to see whether it is set to 1. If not, it will
 signify that no record exists for Sam in this node. Assuming
 it is, we then count the number of 1s @emph{below} position
-64 in the bitmap. This operation is called @tt{popcount()}
+63 in the bitmap. This operation is called @tt{popcount}
 (short for "population count," which counts the number of 1s
 in a machine word), and built into many modern instruction
 sets, so that it executes quite efficiently. We then use
@@ -401,8 +479,12 @@ By doing this, we reduce the amount of space stored for each
 node from 64 to @tt{popcount(bitmap)}. In practice, this
 means that we get good performance when the trie is sparse,
 and when the trie is dense (i.e., most nodes hold close to
-64 child elements) the performance is no worse than an
+64 child elements) the performance is hardly worse than an
 implementation without compression.
+
+@; Do we want to talk about storing the bit map alongside the key for cache coherence. 
+
+
 
 @section{Implementing HAMT}
 
@@ -421,35 +503,30 @@ Nodes are represented by a templated C++ class @tt{KV<K,V,d>}, where:
  ]
 
 The last parameter deserves some explanation. Imagine how
-nodes are be implemented. At each depth in the HAMT, a node
+nodes are to be implemented. At each depth in the HAMT, a node
 handles a 6-bit piece of a 64-bit hash. In our
 implementation, the root node (which we'll implement soon as
 a class called @tt{hamt}) will hold 4 of those bits, while
-the 60 remaining bits will be handled by a trie whose
+the 60 remaining bits will be handled by sub-tries whose
 maximum depth is 10. After depth 10, all values which would
-share the same bucket also share the same hash, and so we
-must devolve into an association list.
+share the same bucket also share the same hash, and so the trie
+devolves into an association list.
 
 To do its work, each inner node in HAMT must know which
-6-bit piece of the hash its working on. We could do this by
-iteratively computing this value as we traverse down the
-nodes, gradually moving from the first four bits (for the
-top level node, which holds four bits), to the second six
-bits, to the third six bits, etc... However, instead, we're
+6-bit piece of the hash its working on. We could handle this by
+computing this value as we traverse down through the trie nodes,
+gradually moving from the first four bits (for the
+top level node, which holds four bits), to the next six
+bits, to the next six bits, etc. However, instead, we're
 going to use template metaprogramming to generate a
 template-specialized version of the node class for each
-depth from 1 to 10, meaning that the C++ compiler will
+depth from 1 to 10. This means that the C++ compiler will
 generate @tt{KV<K,V,0>} through @tt{KV<K,V,9>} for us using
-our template, and we will manually instantiate @tt{
- KV<K,V,10>} by hand to be our node implementation that uses
-an association list. In essence, we have traded an addition
-at @emph{runtime} for a specialization of the code at @emph{
- compile time}.
-
-It's worth noting that we could do this without template
-metaprogramming, but we would have to manually write out the
-code to operate on each six bit sequence from 1 to 10
-ourselves, which would be significantly messy.
+our template, and we will manually specialize @tt{KV<K,V,10>}
+to be an implementation that may use an association list.
+In essence, we have traded various dynamic checks that would
+otherwise happen at @emph{runtime} for a specialization of the
+code at @emph{compile time}.
 
 Here's the C++ code representation for our inner nodes:
 
@@ -495,38 +572,39 @@ section @secref["lazy"]. There are two possibilities for this node:
 
 @itemlist[
  @item{It is a single key-value pair. In this case, we will
-  set the lowest bit of @tt{k} to 0. The upper bits of k will
-  be a pointer to the key, which we can use on subsequent
+  simply use the @tt{K*}, @tt{V*} pair. The bits of k will
+  encode a pointer to the key object, which we can use on subsequent
   lookups. The reason we can do this is that pointers to keys
-  will always be aligned, so that the lowest bit will never be
-  zero. @tt{v} will then be a pointer to the value being
-  stored. }
+  will always be aligned, and so the lowest bit will never be
+  zero! This allows us to use that lowest bit to tag these unions;
+  when it is a zero, @tt{k} is a key and @tt{v} is a stored value.
+  }
 
- @item{It's a node containing buckets. In this case, we will
-  set the lowest bit of @tt{k} to 1. The rest of @tt{k} will
-  be a bitmap containing 63 bits, and @tt{v} will serve the
-  place of the @tt{data} array discussed in section
-  @secref["compress"]}
+ @item{There is more than one matching key for this prefix.
+  In this case, we set the lowest bit of @tt{k} to 1. The rest of @tt{k} will
+  be a 63-bit bitmap, and @tt{v} will point to a compressed buffer, @tt{data},
+  of keys and values as discussed in section @secref["compress"].
+  }
  ]
 
-The lowest level of our HAMT will be a key-value association
-list, using the linked list we implemented in section
-@secref["linkedlist"]:
+The lowest level of our HAMT will either store keys and values or,
+where collisions exist, the value 1 for @tt{k} and a pointer to an association list
+for @tt{v}. This uses the linked list we implemented in section @secref["linkedlist"]:
 
 @codeblock[#:line-numbers 1]|{
-// A template-specialized version of KV<K,V,d> for the lowest depth of inner nodes, d==bd
+// A template-specialized version of KV<K,V,d> for the lowest depth of inner nodes, d==10
 // After this we have exhausted our 64 bit hash (4 bits used by the root and 6*10 bits used by inner nodes)
 template <typename K, typename V>
-class KV<K,V,bd>
+class KV<K,V,10>
 {
     typedef LL<K,V> LLtype;
-    typedef KV<K,V,bd> KVbottom;
+    typedef KV<K,V,10> KVbottom;
 
 public:
     // We use two unions and the following cheap tagging scheme:
     // when the lowest bit of Key k is 0, it's a key and a K*,V* pair (key and value),
     // when the lowest bit of Key k is 1, it's either a bm (bitmap) in the top 63 bits with a
-    // KVnext* v inner node pointer when d is less than bd-1 or it's just a 1 and a pointer to a
+    // KVnext* v inner node pointer when d is less than 9 or it's just a 1 and a pointer to a
     // LL<K,V>* for collisions (In this case we use LL<K,V>*)
     union Key
     {
@@ -564,7 +642,7 @@ class hamt
 private:
     // We use up to 4 bits of the hash for the root, then the
     // other 10*6bits are used for inner nodes up to 10 deep
-    KVtop data[7];
+    KVtop data[16];
     u64 count;
 
 public:
@@ -574,6 +652,7 @@ public:
     // ...
 }
 }|
+
 
 @subsection{Finding a key-value pair in HAMT}
 
@@ -586,7 +665,7 @@ const V* get(const K* const key) const
 {
     // type K must support a method u64 hash() const;
     const u64 h = key->hash();
-    const u64 hpiece = (h & 0xf) % 7;
+    const u64 hpiece = (h & 0xf);
 
     if (this->data[hpiece].k.bm == 0)
         // It's a zero, return null for failure
@@ -617,13 +696,15 @@ node, in which case we delegate to that node's @tt{
  inner_find}. Note that @tt{inner_find} is called with the
 hash shifted by four.
 
+
 @subsubsection{Lookup from an inner node}
 
-Internal nodes look at six bit sequences of the hash from
+Internal nodes look at six-bit pieces of the hash from
 the 5th bit to the 64th bit in the hash. By convention, we
 assume that @tt{inner_find} will only look at the bottom six
 bits of the hash, and that it will always be called in such
 a way that the bits have been shifted appropriately:
+
 
 @codeblock[#:line-numbers 1]|{
 // This is the find algorithm for internal nodes
@@ -657,30 +738,155 @@ static const V* inner_find(const KVtype& kv, const u64 h, const K* const key)
 }
 }|
 
-Note that we right shift the bitmap by one, because the
-lowest bit will be set to zero or one based on the tagging
+Note that we right-shift the bitmap by one, because the
+lowest bit will be set to 1 based on the tagging
 scheme discussed above. We use the @tt{__builtin_popcountll}
 function to calculate @tt{popcount} in an efficient way. The
 compiler will then either generate architecture-specific
 instructions, or (if compiling for an architecture where
-@tt{popcount} has not been implement) an optimized set of
-assembly instructions to do so. We then use the result of
-@tt{popcount} to look up the corresponding index in @tt{
- data}, and perform the lookup for the key-value pair or
+@tt{popcount} has not been implement) an
+@link["https://arxiv.org/pdf/1611.07612.pdf"]{optimized set of  assembly instructions}
+to do so. We then use the result of
+@tt{popcount} to look up the corresponding index in @tt{data},
+and perform the lookup for the key-value pair or
 again delegate to @tt{inner_find}.
 
-@subsubsection{Lookup From an Association List}
 
 @subsection{Inserting Into HAMT}
 
-Inserting into a HAMT involes many of the same operations as
-searching for a key-value pair. The main changes are to:
+Inserting into a HAMT involves many of the same operations as
+searching for a key-value pair. First, @tt{popcount} is used to determine
+the overall length of the compressed buffer @tt{data}, and the index @tt{i}
+of the @tt{KVnext} for the prefix that includes the next six-bit piece @tt{hpiece}.
+Note that because we need the lowest bit of @tt{k} for tagging, we take each hash
+piece modulo 63, conflating the numbers 0 and 64. Assuming our hash function is
+decent, this shouldn't impact performance in practice.
 
-@itemlist[
- @item{Allocate memory for new pieces of the HAMT and copy
-  pieces of the original HAMT.}
- @item{Break apart parts of the HAMT when collisions happen
-  on parts of the hash to build the HAMT lazily as described in section @secref["lazy"].}
- ]
+@codeblock[#:line-numbers 1]|{
+    // Inserts an h, k, v into an existing KV and returns a fresh KV for extended hash
+    static const KVtype insert_inner(const KVtype& kv, const u64 h, const K* const key, const V* const val, u64* const cptr)
+    {
+        // data is a pointer to the inner node at kv.v
+        // bm is the bitmap indicating which elements are actually stored
+        // count is how many KV elements this inner node stores (popcount of bm)
+        // i is hpiece's index; i.e., how many KV elements *preceed* index hpiece
+        const KVnext* const data = kv.v.node;
+        const u64 bm = kv.k.bm >> 1;        
+        const u32 hpiece = (h & 0x3f) % 63;
+        const u32 count = __builtin_popcountll(bm);
+        const u32 i = __builtin_popcountll((bm << 1) << (63 - hpiece));
 
- 
+        const bool exists = bm & (1UL << hpiece);
+        if (exists)
+        {
+            // Check to see what kind of KV pair this is by checking the lowest bit of k
+            //   0 -> it's an actual K*,V* pair
+            //   1 -> it's either another inner node (KV*) or a linked list (LL<K,V>*) depending on d+1
+            if ((data[i].k.bm & 1) == 0)
+            {
+                // Does the K* match exactly?
+                if (*(data[i].k.key) == *key)
+                {
+                    // it already exists; replace the value  
+                    const KVnext* const node = KVnext::update_node(data, count, i, KVnext(key,val));
+                    return KVtype(kv.k.bm, node);
+                }                    
+                else
+                {
+                    // Merge them into a new inner node
+                    (*cptr)++;
+                    const KVnext childkv = KVnext::new_inner_node(
+                        // Passes in the first triple of h,k,v, then the second
+                        // When shifting the just-recomputed hash right, this formula is computed at compile time
+                        // This also means a warning on the d=9 template instantiation, so we do %64 as d=10
+                        // does not care in any case as it's definitely a LL*.
+                        (data[i].k.key->hash() >> ((6*(d+1)+4)) % 64), data[i].k.key, data[i].v.val,
+                        h >> 6, key, val);
+                    const KVnext* const node = KVnext::update_node(data, count, i, childkv);
+                    return KVtype(kv.k.bm, node);
+                }
+            }
+            else //if ((data[i].k & 1) == 1)
+            {
+                // an inner node is already here; recursively do an insert and replace it
+                const KVnext childkv = KVnext::insert_inner(data[i], h >> 6, key, val, cptr);
+                const KVnext* const node = KVnext::update_node(data, count, i, childkv);
+                return KVtype(kv.k.bm, node);
+            }
+        }
+    }
+}|
+
+If the @tt{KVnext} for this @tt{hpiece} exists in the compressed buffer @tt{data},
+control takes the first branch of the conditional @tt{if (exists)}, otherwise it takes
+the second. When the the KV doesn't exist, a new inner node is allocated with one
+additional index for the new key and value. A pointer to a counter value @tt{cptr} is incremented
+to track that the number of keys in the map has increased. A single KV of @tt{KVtype}, as opposed
+to @tt{KVnext}, is returned that points to this larger internal node and has an updated bitmap.
+
+In the case that the KV at hpiece exists, it is either a key and value, or another internal node.
+If it is a key and value where the key matches exactly, the value can be updated in
+a copy of the node that is returned. Functionally updating a single index of an internal node
+is handled by a helper method @tt{update_node}:
+
+@codeblock[#:line-numbers 1]|{
+    static const KVtype* update_node(const KVtype* old, const u32 count, const u32 i, const KVtype& kv)
+    {
+        KVtype* copy = (KVtype*)GC_MALLOC(count*sizeof(KVtype));
+        std::memcpy(copy, old, count*sizeof(KV));
+        new (copy+i) KVtype(kv);
+        return copy;
+    }
+}|
+
+If the key matches in its hash only, the two keys
+are merged into a new internal node using a helper function @tt{new_inner_node}:
+
+ @codeblock[#:line-numbers 1]|{
+    // Helper returns a fresh inner node for two merged h, k, v triples
+    static const KVtype new_inner_node(const u64 h0, const K* const k0, const V* const v0,
+                                       const u64 h1, const K* const k1, const V* const v1)
+    {
+        // Take the lowest 6 bits modulo 63 
+        const u32 h0piece = (h0 & 0x3f) % 63;
+        const u32 h1piece = (h1 & 0x3f) % 63;
+        
+        if (h0piece == h1piece)
+        {
+            // Create a new node to merge them at d+1
+            const KVnext childkv = KVnext::new_inner_node(h0 >> 6, k0, v0, h1 >> 6, k1, v1);
+            KVnext* const node = (KVnext*)GC_MALLOC(sizeof(KVnext));
+            new (node+0) KVnext(childkv);
+             
+            // Return a new kv; bitmap indicates h0piece, the shared child inner node
+            return KVtype(((1UL << h0piece) << 1) \| 1, node);                
+        }
+        else
+        {
+            // The two key/value pairs exist at different buckets at this d
+            // allocate them in proper order 
+            KVnext* const node = (KVnext*)GC_MALLOC(2*sizeof(KVnext));
+            if (h1piece < h0piece)
+            {
+                new (node+0) KVnext(k1,v1);
+                new (node+1) KVnext(k0,v0);
+            }
+            else
+            {
+                new (node+0) KVnext(k0,v0);
+                new (node+1) KVnext(k1,v1);
+            }
+            
+
+            // Return a new kv; bitmap indicates both h0piece and h1piece
+            return KVtype((((1UL << h0piece) \| (1UL << h1piece)) << 1) \| 1, node);
+        }
+    }
+}|
+
+Note that in the case where the two keys continue to match in the next chunk of their hash,
+the helper @tt{new_inner_node} makes a recusive call to itself.
+
+
+
+
