@@ -8,9 +8,6 @@
 @(define (capitalize-first-letter str)
   (regexp-replace #rx"^." str string-upcase))
 
-@;@(define (cbold str)
-@;  (centered (bold str)))
-
 @; See how I used unquote-splicing here like a Racket pro
 @(define (kris . comment)
   (apply string-append `("(Kris: " ,@comment ")")))
@@ -60,7 +57,6 @@ the phonebook when I update keys that exist in the phonebook at
 earlier times. I need a data structure that supports:
 
 @itemlist[
-
  @item{@tt{insert(key,value)}, which gives me back a new map
   containing all the same pairs as the old one, except for the newly
   inserted pair, or update to existing pair. That is, I want a
@@ -75,31 +71,32 @@ earlier times. I need a data structure that supports:
  map.}
 ]
 
-We can use a mutable map (as we did above) to meet the functional
-requirements of this API:
+Note that we could technically obtain a persistent map by simply
+cloning a mutable map each time we perform a change:
 
 @(cimgn "images/copymap.png")
 
-But insertion and deletion both require cloning the mutable hash
-table. This incurs both linear time and linear space, which falls far
-short of what we'd like.
+But this uses both linear time and linear space, which falls far short
+of what we'd like. As we'll see, the key to a more efficient data
+structure is sharing.
 
 @; Really need this to be a subsection? Or blow away this header?
 @subsection{Towards a solution: association lists}
 
-We can reduce space overhead to @${O(1)} by switching to using
+@kris{This section still seems weird. I.e., I say we want to move to a
+more persistent data strucutre. But our lits don't do that! So it
+seems kind of dumb like a bait and swtich. What do you think we should
+do about that?}
+
+To get towards a more persistent data structure, we can switch to using
 association lists.  Association lists are linked lists made up of
 key-value pairs. To perform @tt{lookup(map,k)}, we walk down the links
 of @tt{map} until we find a link with the corresponding key.
 
 To perform @tt{insert(map,k,v)}, we first traverse each link of
 @tt{map} (as in @tt{lookup}) to ensure that no pair for @tt{key}
-exists. If it does not, we prepend a link which contains @tt{k,v} and
-then links to @tt{map}:
-
-@kris{I don't get this image: why is "Kelly" the second link?
-Is my descrption wrong? It might be, because I've merged these two
-ways of doing it to focus on one.}
+exists. If it does not, we append a link which contains @tt{k,v} to
+the end of the list, sharing the prefix:
 
 @(cimgn "images/assoclist2.png")
 
@@ -109,31 +106,31 @@ into the list in the appropriate location (while leaving @tt{map}
 alone).
 
 This means our lookup times can be in @($ "O(n)"), but then so are our
-insert, remove and space overheads. But in return, we exploit
-@emph{sharing}, so that insertions and deletions reuse most of the
-links of the previous map, only adding a single new link to hold the
-incremental change to the map. @kris{This needs cleanup.}
+insert, remove and space overheads. But in the case that no key
+exists, we exploit @emph{sharing}, so that insertions into a list
+where no key previously exists reuses most of the links of the
+previous list, only adding a single new link to hold the incremental
+change to the map.
 
 @tabular[#:style 'boxed
          #:sep @hspace[1]
  (list (list @bold{Operation} @bold{Runtime} @bold{Space overhead})
-       (list @tt{insert}  ($ "O(n)") ($ "O(1)"))
+       (list @tt{insert}  ($ "O(n)") ($ "O(n)"))
        (list @tt{lookup}  ($ "O(n)") "-")
-       (list @tt{remove}  ($ "O(n)") ($ "O(1)"))
+       (list @tt{remove}  ($ "O(n)") ($ "O(n)"))
        )]
 
-We'll see that exploiting sharing is a key ingredient to implementing
-efficient persistent datastructures.  To obtain an efficient
-persistent map, we'll use several tiers of hashmaps, along with
-sharing between those tiers. At the final tier we'll use an
-association list, as we would in a regular hashmap, to account for the
-possibility of hash collisions.
+In practice, association lists are not a particularly efficient data
+structure, but we'll see that their implementation will be one
+component that will help get us towards implementing HAMT. To obtain
+HAMT, we'll use several tiers of hashmaps, along with sharing between
+those tiers. At the final tier we'll use an association list, as we
+would in a regular hashmap, to account for the possibility of hash
+collisions.
 
 @subsection[#:tag "linkedlist"]{Implementing association lists}
 
-@kris{Overall: can we switch to 2-space tabs for C++ code?}
-
-Let's see how we might implement these association lists. First,
+Let's see how we implement association lists. First,
 we're going to represent each individual link as a key,
 value, and pointer to next node. We want the key and value
 to be of arbitrary types, so we're going to use C++
