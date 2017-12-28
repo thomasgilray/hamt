@@ -37,7 +37,7 @@ public:
             h = h * 0x100000001b3;
         }
 
-        return h;
+        return h&0x7000070010000010;
     }
 
     bool operator==(const tuple& t) const
@@ -64,7 +64,7 @@ void testround()
     const hamt<tuple, tuple>* h = new ((hamt<tuple,tuple>*)GC_MALLOC(sizeof(hamt<tuple,tuple>))) hamt<tuple,tuple>();
 
     // *** This is the main value to scale the test up or down
-    const u32 loops = 75000;
+    const u32 loops = 90000;
     // *************************
 
     // Add values
@@ -98,10 +98,10 @@ void testround()
                 exit(1);
             if (i % 50000 == 0) report_gc_size();
         }
-
+    //std::cout << "reached" << std::endl; // seems to reach here and then perhaps non-terminates?
     // Remove some values
-    for (u32 j = 0; j < 3; ++j)
-        for (u32 i = offset-100; i < offset+(loops/15)*j; ++i)
+    for (u32 j = 0; j < 6; ++j)
+        for (u32 i = offset-100; i < offset+(loops/6)*j; ++i)
         {
             const tuple* const t = new ((tuple*)GC_MALLOC(sizeof(tuple))) tuple(i,i+1,i*i);
             h = h->remove(t);
@@ -112,14 +112,25 @@ void testround()
             if (i % 50000 == 0) report_gc_size();
         }
 
-    if (h->size() != (loops - ((loops/15)*2))) { std::cout << h->size() << std::endl; exit(1);}
+    // Iterate over the remainder
+    u64 sz = (loops - ((loops/6)*5));
+    while (sz > 0)
+    {
+        if (h->size() != sz) { std::cout << "Bad size: " <<  h->size() << std::endl; exit(1);}
+        const tuple* k0 = 0;
+        const tuple* v0 = 0;
+        h = h->removeFirst(&k0, &v0);
+        if (h->size() != (--sz)) { std::cout << "Bad new size: " <<  h->size() << std::endl; exit(1);}
+        //std::cout << "Removed: k0->x == " << k0->x << ", v0->y == " << v0->y << ", new sz == " << sz << std::endl;
+    }
+    
     h = 0;
 }
 
 
 int main()
 {
-    u32 rounds = 5;
+    u32 rounds = 4;
 
     std::srand(12345);//utime());
 

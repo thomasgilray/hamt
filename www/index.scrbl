@@ -35,7 +35,7 @@
 
 @section{Introduction}
 
-@section{Motivation: Persistent Maps}
+@section{Motivation: Persistent, Immutable Maps}
 
 Let's say we wanted to implement a phonebook using a mutable map:
 
@@ -54,21 +54,22 @@ at any point in time:
 
 The problem with a mutable map is that I invalidate older copies of
 the phonebook when I update keys that exist in the phonebook at
-earlier times. I need a data structure that supports:
+earlier times. Instead, I want an @emph{immutable} data structure that
+supports methods:
 
 @itemlist[
- @item{@tt{insert(key,value)}, which gives me back a new map
+ @item{@tt{map->insert(key,value)}, which gives me back a @emph{new} map
   containing all the same pairs as the old one, except for the newly
-  inserted pair, or update to existing pair. That is, I want a
-  functional insert operation that consumes and produces immutable
-  maps.}
+  inserted pair (or with the value updated if @tt{key} was already in the map).
+  That is, I want a functional insert operation that consumes and
+  produces immutable maps.}
 
-@item{@tt{lookup(map,key)}, that looks up a record in the map. This
-  should run in near-constant time.}
+@item{@tt{map->lookup(key)}, that efficiently looks up a record in the map.}
 
- @item{@tt{delete(map,key)}, that removes a record from the map. Just
+ @item{@tt{map->remove(key)}, that deletes a record from the map. Just
  like @tt{insert}, this should both consume and produce a functional
- map.}
+ map. The map returned should not contain @tt{key} and the map consumed
+ should not be mutated and still contains @tt{key} if it did already.}
 ]
 
 Note that we could technically obtain a persistent map by simply
@@ -76,41 +77,41 @@ cloning a mutable map each time we perform a change:
 
 @(cimgn "images/copymap.png")
 
-But this uses both linear time and linear space, which falls far short
-of what we'd like. As we'll see, the key to a more efficient data
-structure is sharing.
+But this uses linear time, linear space, and is slow in practice, which falls
+far short of what we'd like. As we'll see next, the key to a more efficient data
+structure is immutability because this enables sharing (productive
+persistance where portions of maps that are unchanged may be shared
+across multiple versions).
 
-@; Really need this to be a subsection? Or blow away this header?
-@subsection{Towards a solution: association lists}
 
-@kris{This section still seems weird. I.e., I say we want to move to a
-more persistent data strucutre. But our lits don't do that! So it
-seems kind of dumb like a bait and swtich. What do you think we should
-do about that?}
+@subsection{A naïve persistant map: association lists}
+@; I do like this subsection and assoc lists do allow sharing, just not much. I'll elaborate on this below.
 
-To get towards a more persistent data structure, we can switch to using
-association lists.  Association lists are linked lists made up of
-key-value pairs. To perform @tt{lookup(map,k)}, we walk down the links
-of @tt{map} until we find a link with the corresponding key.
 
-To perform @tt{insert(map,k,v)}, we first traverse each link of
+A simple example of an immutable, persistant data-structure is an association list.
+Association lists are linked lists consisting of key-value pairs. To perform @tt{map->lookup(k)}, we walk down the links
+of @tt{map} until we find a link with the corresponding key; if we reach the end of the list instead, the key was not found.
+
+When association lists are updated, either new keys are appended to the front which shadow older keys, or the list is fully traversed
+to maintain an invariant that at most one copy of a key has a binding at a time. For space efficiency, we present the later kind so that
+sequences of inserts cannot build up arbitrarily large data structures that encode only a small number of visible keys.
+Thus, to perform @tt{map->insert(k,v)}, we traverse each link of
 @tt{map} (as in @tt{lookup}) to ensure that no pair for @tt{key}
-exists. If it does not, we append a link which contains @tt{k,v} to
-the end of the list, sharing the prefix:
+already exists. If it does, we update the list from that point, emiting a new list that shares a tail
+with the input list. If it does not, we append a link which contains @tt{k,v} to
+the end of the list, rebuilding the common prefix:
 
 @(cimgn "images/assoclist2.png")
 
-If @tt{key} exists in @tt{map}, we need to modify our approach
-slightly, so that we allocate a new cell for @tt{k,v} and splice it
-into the list in the appropriate location (while leaving @tt{map}
-alone).
-
 This means our lookup times can be in @($ "O(n)"), but then so are our
-insert, remove and space overheads. But in the case that no key
-exists, we exploit @emph{sharing}, so that insertions into a list
-where no key previously exists reuses most of the links of the
-previous list, only adding a single new link to hold the incremental
-change to the map.
+insert, remove and space overheads. In the case where keys that exist
+in an input map are updated or removed, the returned list will share
+its tail with the input association list. Both lists are immutable and
+it's perfectly safe for us to exploit this fact by reusing portions of the input
+map to encode portions of the output map where they don't need to change.
+In the case of an association list, this doesn't affect the complexity class
+of our operations (only improves constant factors) but it does illustrate the principle
+of sharing and persistance that will make our HAMT data structure performant.
 
 @tabular[#:style 'boxed
          #:sep @hspace[1]
@@ -121,20 +122,20 @@ change to the map.
        )]
 
 In practice, association lists are not a particularly efficient data
-structure, but we'll see that their implementation will be one
-component that will help get us towards implementing HAMT. To obtain
-HAMT, we'll use several tiers of hashmaps, along with sharing between
-those tiers. At the final tier we'll use an association list, as we
-would in a regular hashmap, to account for the possibility of hash
-collisions.
+structure on their own, but, in addition to illustrating the value of
+immutability and persistance, they form a component of our final HAMT implementation.
+To obtain HAMT, we'll use a tiered tree structure that, along with sharing at each
+of its tiers, can terminate in association lists (that can also be shared between HAMT
+instances).
+
 
 @subsection[#:tag "linkedlist"]{Implementing association lists}
 
 Let's see how we implement association lists. First,
 we're going to represent each individual link as a key,
-value, and pointer to next node. We want the key and value
-to be of arbitrary types, so we're going to use C++
-templates. Let's start by stubbing out the class definition:
+value, and pointer to the next node. We want the key and values
+to be of arbitrary (but specified) types, so we're going to use C++
+templates (generic programming). Let's start by stubbing out the class definition:
 
 @codeblock[#:line-numbers 1]|{
 template <typename K, typename V>
@@ -164,9 +165,9 @@ qualifiers, meaning we won't be able to modify the data
 being pointed at, or the pointers to the keys and values
 themselves. This is exactly the behavior we want for our
 association list; otherwise, sharing portions of old association
-lists would be impossible as modifying them could modify all
+lists would be impossible as modifying them could update all
 maps that had previously been derived from them. Our constructor
-therefore initializes fields and nothing else.
+therefore initializes fields and all other operations are @tt{const}.
 
 A find or lookup algorithm is defined as a straightforward traversal
 that returns a @tt{const V*} or null pointer.
@@ -185,8 +186,8 @@ that returns a @tt{const V*} or null pointer.
 
 The insert algorithm descends the association list checking for a matching key (line 3). If it matches,
 we rebuilt the current node using an updated value @tt{LLtype(this->k, v, next)} (line 4) and @emph{placement new}
-syntax @tt{new ((T*)ptr) T(...)} which constructs a value at an existing location---in this case, new memory obtained
-from the Boehm garbage collector.
+syntax @tt{new ((T*)ptr) T(...)} which constructs a value at an existing location, @tt{ptr}---in this case,
+new memory obtained from the Boehm garbage collector.
 
 @codeblock[#:line-numbers 1]|{
     const LLtype* insert(const K* const k, const V* const v) const
@@ -212,6 +213,7 @@ In the case where the current link doesn't match but has a non-null tail, the cu
 @tt{LLtype} pointer is returned from a recursive insert (line 6). If the end of the list is reached with no key found,
 we may insert the new element on the front or back of the list. In this case we show the latter for simplicity.
 
+
 @section{Next: Trees and Tries}
 
 A standard data structure in any programmer's arsenal is the sorted tree.
@@ -228,8 +230,8 @@ This happens when elements are inserted in order. A number
 of techniques exist to avoid this worst-case behavior. For
 example,
 @link["https://en.wikipedia.org/wiki/Red%E2%80%93black_tree"]{
- Red-Black trees} automatically rebalance upon each @tt{
- insert} operation. Unfortunately, this requires mutability so
+ Red-Black trees} automatically rebalance upon each @tt{insert}
+ operation. Unfortunately, this requires mutability so
  an existing tree may be rewired into a more balanced version of itself.
 
 A way of constructing a balanced binary tree probabilistically
