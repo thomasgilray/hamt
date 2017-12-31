@@ -272,7 +272,7 @@ public:
     
     // Removes a single arbitrary key/value and sets keyPtr/valPtr
     static const KVtype removeFirst_inner(const KVtype& kv, const K** const keyPtr, const V** const valPtr)
-    {
+    { 
         const KVnext* const data = kv.v.node;
         const u64 bm = kv.k.bm >> 1;
         const u32 count = __builtin_popcountll(bm);
@@ -281,11 +281,14 @@ public:
         {
             // Remove first from inner node
             const KVnext childkv = KVnext::removeFirst_inner(data[0], keyPtr, valPtr);
+
+            // If a new inner node comes back, build an updated node with the same bm
             if (childkv.k.bm != 0)
             {
                 const KVnext* const node = KVnext::update_node(data, count, 0, childkv);
                 return KVtype(kv.k.bm, node);
             }
+            // Otherwise, fall through and shrink the node
         }
         else
         {
@@ -297,51 +300,14 @@ public:
         // If either a key/value or whole inner node was removed, shrink this inner node
         if (count == 1)
             return KVtype((K*)0, (V*)0);
-        
-        KVnext* const node = (KVnext*)GC_MALLOC((count-1)*sizeof(KVnext));
-        std::memcpy(node, &(data[1]), (count-1)*sizeof(KVnext));
-
-        // Find hindex (coarse, unrolled binary search ...surely there is a cleaner&faster way)
-        u64 hindex = 0;
-        if ((bm & 0xffffffff00000000) == bm)
-        {
-            if ((bm & 0xffff000000000000) == bm)
-            {
-                if ((bm & 0xff00000000000000) == bm)
-                    hindex = 56;
-                else
-                    hindex = 48;
-            }
-            else
-            {
-                if ((bm & 0xffffff0000000000) == bm)
-                    hindex = 40;
-                else
-                    hindex = 32;
-            }
-        }
         else
         {
-            if ((bm & 0xffffffffffff0000) == bm)
-            {
-                if ((bm & 0xffffffffff000000) == bm)
-                    hindex = 24;
-                else
-                    hindex = 16;
-            }
-            else
-            {
-                if ((bm & 0xffffffffffffff00) == bm)
-                    hindex = 8;
-                else
-                    hindex = 0;
-            }
+            KVnext* const node = (KVnext*)GC_MALLOC((count-1)*sizeof(KVnext));
+            std::memcpy(node, &(data[1]), (count-1)*sizeof(KVnext));
+            // bm & (bm-1) removes the lowest-significant bit in bm
+            const u64 newbm = ((bm & (bm - 1)) << 1) | 1;
+            return KVtype(newbm, node);
         }
-        while ((bm & (0xfffffffffffffffe << hindex)) == bm) ++hindex;
-            
-        //  Remove this hindex from the bitmap
-        const u64 newbm = ((bm & (0xffffffffffffffff ^ (1UL << hindex))) << 1) | 1;
-        return KVtype(newbm, node);
     }
 
     // Removes key from kv and returns an updated KV
@@ -401,7 +367,7 @@ public:
                         KVnext* const node = (KVnext*)GC_MALLOC((count-1)*sizeof(KVnext));
                         std::memcpy(node, data, i*sizeof(KV));
                         std::memcpy(&(node[i]), &(data[i+1]), (count-1-i)*sizeof(KVnext));
-                    
+                        
                         // Remove this hpiece from the bitmap
                         const u64 newbm = ((bm & (0xffffffffffffffff ^ (1UL << hpiece))) << 1) | 1;
                         return KVtype(newbm, node);
@@ -636,7 +602,7 @@ public:
                 return new_root;
             }
             else if (this->data[i].k.bm != 0)
-            {
+            { 
                 *keyPtr = this->data[i].k.key;
                 *valPtr = this->data[i].v.val;
                 return this->remove(*keyPtr);
@@ -651,19 +617,19 @@ public:
         // type K must support a method u64 hash() const; 
         const u64 h = key->hash();
         const u64 hpiece = (h & 0x11000000000000f) % rootsize;
- 
+
         if (this->data[hpiece].k.bm == 0)
             return this;
         else if ((this->data[hpiece].k.bm & 1) == 0)
-        {
+        { 
             // the root node already has a key/value pair at hpiece
             // (we turn on the lowest bit to indicate when it is not a K*)
             if (*(this->data[hpiece].k.key) == *key)
-            {
+            { 
                 hamt<K,V>* new_root = (hamt<K,V>*)GC_MALLOC(sizeof(hamt<K,V>));
                 std::memcpy(new_root, this, sizeof(hamt<K,V>));
-                new (&new_root[hpiece]) KVtop(0,(V*)0);
-                (new_root->count)--;
+                new (&(new_root->data[hpiece])) KVtop((K*)0,(V*)0);
+                --(new_root->count);
                 return new_root;
             }
             else

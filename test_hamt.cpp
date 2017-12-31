@@ -9,7 +9,6 @@
 #include <chrono>
 #include <thread>
 
-
 u64 utime()
 {
     return ((u64)std::chrono::high_resolution_clock::now().time_since_epoch().count()) / 1000;
@@ -37,7 +36,9 @@ public:
             h = h * 0x100000001b3;
         }
 
-        return h&0x7000070010000010;
+        return h;
+        //return h&0x7000000fff00000f;
+        //return h&0x7000003000000001;
     }
 
     bool operator==(const tuple& t) const
@@ -63,7 +64,7 @@ void testround()
 
     const hamt<tuple, tuple>* h = new ((hamt<tuple,tuple>*)GC_MALLOC(sizeof(hamt<tuple,tuple>))) hamt<tuple,tuple>();
 
-    // *** This is the main value to scale the test up or down
+    // *** This is the main value to scale the test up or down (Try values around 25k - 250k)
     const u32 loops = 90000;
     // *************************
 
@@ -112,6 +113,9 @@ void testround()
             if (i % 50000 == 0) report_gc_size();
         }
 
+    // Create a new hash to save an intermediate hashmap and use for the final round
+    const hamt<tuple, tuple>* m = new ((hamt<tuple,tuple>*)GC_MALLOC(sizeof(hamt<tuple,tuple>))) hamt<tuple,tuple>();
+
     // Iterate over the remainder
     u64 sz = (loops - ((loops/6)*5));
     while (sz > 0)
@@ -122,9 +126,89 @@ void testround()
         h = h->removeFirst(&k0, &v0);
         if (h->size() != (--sz)) { std::cout << "Bad new size: " <<  h->size() << std::endl; exit(1);}
         //std::cout << "Removed: k0->x == " << k0->x << ", v0->y == " << v0->y << ", new sz == " << sz << std::endl;
+        if (sz > 999) m = h;
     }
     
-    h = 0;
+    // Perform random operations on m and fully validate each
+    for (u32 i = 0; i < loops/300; ++i)
+    {
+        const hamt<tuple, tuple>* const prev = m;
+        const u32 op = std::rand() % 3;
+        if (op == 0)
+        {
+            // Do an insert
+            const tuple* const t = new ((tuple*)GC_MALLOC(sizeof(tuple))) tuple(rand()%0xfffffff,rand()%0xffff,rand()%0xfffff); 
+            const hamt<tuple, tuple>* rest = (m = m->insert(t,t));
+            const hamt<tuple, tuple>* seen = new ((hamt<tuple,tuple>*)GC_MALLOC(sizeof(hamt<tuple,tuple>))) hamt<tuple,tuple>();
+            while (rest->size())
+            {
+                const tuple* k0 = 0;
+                rest = rest->removeFirst(&k0, &k0);
+                //std::cout << "sz: " << rest->size() << std::endl;
+                //std::cout << "k0: " << k0->x << std::endl;
+                if (k0 == 0)
+                {    std::cout << "NULL encountered during traversal" << std::endl; exit(1); }
+                else if (seen->get(k0) != 0)
+                {    std::cout << "some tuple encountered twice during traversal" << std::endl; exit(1); }
+                
+                const tuple* const prev_v = prev->get(k0);
+                if (prev_v == 0 && !((*k0) == (*t)))
+                {    std::cout << "Randomly extended m encounters value not in prev" << std::endl; exit(1); }
+                else if (prev_v != 0 && !((*prev_v) == (*k0)))
+                {    std::cout << "Randomly extended m doesn't match prev's val" << std::endl; exit(1); }
+                seen = seen->insert(k0,k0);
+            }
+        }
+        else if (op == 1)
+        {
+            // Do a random remove
+            const tuple* const t = new ((tuple*)GC_MALLOC(sizeof(tuple))) tuple(rand()%0x3fffffff,rand()%0xff,rand()%0x2fffffff); 
+            const hamt<tuple, tuple>* rest = m->remove(t);
+            if (rest->size() != m->size())
+            {    std::cout << "Randomly removed tuple actually shrunk hash size. *Very* likely a bug." << std::endl; exit(1); }
+            m = rest;
+        }
+        else
+        {
+            // Remove a random key (from the map m)
+            u32 kn = rand() % m->size();
+            const hamt<tuple, tuple>* rest = m;
+            const hamt<tuple, tuple>* seen = new ((hamt<tuple,tuple>*)GC_MALLOC(sizeof(hamt<tuple,tuple>))) hamt<tuple,tuple>();
+            const tuple* kk = 0;
+            while (rest->size())
+            {
+                const tuple* k0 = 0;
+                rest = rest->removeFirst(&k0, &k0);
+                //std::cout << "sz: " << rest->size() << std::endl;
+                //std::cout << "k0: " << k0->x << std::endl;
+                if (k0 == 0)
+                {    std::cout << "NULL encountered during traversal." << std::endl; exit(1); }
+                else if (seen->get(k0) != 0)
+                {    std::cout << "some tuple encountered twice during traversal." << std::endl; exit(1); }
+                seen = seen->insert(k0,k0);
+                if (rest->size() == kn)
+                    kk = k0;
+            }
+
+            const tuple* const t = new ((tuple*)GC_MALLOC(sizeof(tuple))) tuple(kk->x,kk->y,kk->z); 
+            rest = m->remove(t);
+            seen = new ((hamt<tuple,tuple>*)GC_MALLOC(sizeof(hamt<tuple,tuple>))) hamt<tuple,tuple>();
+            while (rest->size())
+            {
+                const tuple* k0 = 0;
+                rest = rest->removeFirst(&k0, &k0);
+                //std::cout << "sz: " << rest->size() << std::endl;
+                //std::cout << "k0: " << k0->x << std::endl;
+                if (k0 == 0)
+                {    std::cout << "NULL encountered during traversal.." << std::endl; exit(1); }
+                else if (seen->get(k0) != 0)
+                {    std::cout << "Some tuple encountered twice during traversal." << std::endl; exit(1); }
+                else if ((*kk) == (*k0))
+                {    std::cout << "removed tuple encountered during traversal!" << std::endl; exit(1); }    
+                seen = seen->insert(k0,k0);
+            }
+        }
+    }
 }
 
 
